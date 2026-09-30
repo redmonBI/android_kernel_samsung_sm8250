@@ -212,6 +212,10 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   enqueue(async () => {
     try {
+      if (url.pathname === "/api/health" && req.method === "GET") {
+        return send(res, 200, JSON.stringify({ ok: true, name: "LUMEN" }));
+      }
+
       if (url.pathname === "/api/login" && req.method === "POST") {
         const body = await readBody(req);
         const state = ensureState();
@@ -289,5 +293,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, HOST, () => {
   ensureState();
-  console.log(`LUMEN listening on http://${HOST}:${PORT}`);
+  console.log(`LUMEN ready`);
+  console.log(`  local   http://127.0.0.1:${PORT}`);
+  console.log(`  network http://0.0.0.0:${PORT}`);
 });
