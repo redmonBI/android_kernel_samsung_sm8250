@@ -34,20 +34,38 @@ let state = null;
 let user = null;
 let token = sessionStorage.getItem("lumen-token") || "";
 let health = "checking";
+let mode = "server";
+let ledger = null;
+
+function siteUrl(path) {
+  return new URL(String(path).replace(/^\//, ""), document.baseURI);
+}
+
+function stripUser(account) {
+  if (!account) return null;
+  const pub = { ...account };
+  delete pub.password;
+  return pub;
+}
+
+function withSession(data, actor) {
+  return { ...data, users: (data.users || []).map(stripUser), sessionUser: stripUser(actor) };
+}
 
 function weekById(id) {
   return state.weeks.find((week) => week.id === id) || state.weeks[state.weeks.length - 1];
 }
 
 function ctx() {
-  return { state, user, ui };
+  return { state, user, ui, mode };
 }
 
 async function api(path, options = {}) {
+  if (mode === "static") return staticApi(path, options);
   const headers = { ...(options.headers || {}) };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
-  const response = await fetch(path, { ...options, headers });
+  const response = await fetch(siteUrl(path), { ...options, headers });
   const data = await response.json().catch(() => ({}));
   if (response.status === 401 && path !== "/api/login") {
     logout(false);
@@ -55,6 +73,52 @@ async function api(path, options = {}) {
   }
   if (!response.ok) throw new Error(data.error || "요청을 처리하지 못했습니다.");
   return data;
+}
+
+function persistLedger() {
+  localStorage.setItem("lumen-ledger", JSON.stringify(ledger));
+}
+
+async function loadSeed() {
+  const response = await fetch(siteUrl("data/seed.json"), { cache: "no-store" });
+  if (!response.ok) throw new Error("장부 원본을 열지 못했습니다.");
+  return response.json();
+}
+
+async function staticApi(path, options = {}) {
+  const body = options.body ? JSON.parse(options.body) : {};
+  if (path.endsWith("/login") || path === "/api/login") {
+    const found = ledger.users.find((item) => item.id === String(body.id || "").trim() && item.password === String(body.password || ""));
+    if (!found) throw new Error("아이디 또는 비밀번호를 확인하세요.");
+    return { token: "static", user: stripUser(found) };
+  }
+  if (!user) throw new Error("로그인이 필요합니다.");
+  if (path.endsWith("/password")) {
+    const me = ledger.users.find((item) => item.id === user.id);
+    if (!me || me.password !== String(body.current || "")) throw new Error("현재 비밀번호가 맞지 않습니다.");
+    if (String(body.next || "").length < 6) throw new Error("새 비밀번호는 6자 이상으로 정하세요.");
+    me.password = String(body.next);
+    persistLedger();
+    return { ok: true };
+  }
+  if (path.endsWith("/reset")) {
+    if (user.role !== "lead") throw new Error("팀장만 원장을 되돌릴 수 있습니다.");
+    ledger = await loadSeed();
+    persistLedger();
+    return withSession(ledger, ledger.users.find((item) => item.id === user.id));
+  }
+  if (path.endsWith("/state") && options.method === "PUT") {
+    const incoming = JSON.parse(options.body);
+    delete incoming.sessionUser;
+    const users = (incoming.users || []).map((item) => {
+      const prev = ledger.users.find((account) => account.id === item.id);
+      return { ...(prev || {}), ...item, password: item.password || prev?.password || "" };
+    });
+    ledger = { ...incoming, users };
+    persistLedger();
+    return withSession(ledger, ledger.users.find((item) => item.id === user.id) || user);
+  }
+  return withSession(ledger, ledger.users.find((item) => item.id === user.id) || user);
 }
 
 function adoptState(data) {
@@ -103,6 +167,7 @@ function logout(doRender = true) {
   user = null;
   state = null;
   sessionStorage.removeItem("lumen-token");
+  sessionStorage.removeItem("lumen-user");
   if (doRender) render();
 }
 
@@ -113,6 +178,7 @@ async function login(id, password) {
     token = result.token;
     user = result.user;
     sessionStorage.setItem("lumen-token", token);
+    sessionStorage.setItem("lumen-user", user.id);
     await loadState();
     location.hash = "#/today";
     render();
@@ -582,12 +648,40 @@ document.addEventListener("keydown", (event) => {
 window.addEventListener("hashchange", onHash);
 
 async function boot() {
+  let serverUp = false;
   try {
-    const response = await fetch("/api/health");
-    health = response.ok ? "ok" : "down";
+    const response = await fetch(siteUrl("api/health"), { cache: "no-store" });
+    serverUp = response.ok && (await response.json()).ok === true;
   } catch {
-    health = "down";
+    serverUp = false;
   }
+  if (!serverUp) {
+    mode = "static";
+    health = "static";
+    try {
+      ledger = JSON.parse(localStorage.getItem("lumen-ledger") || "null") || await loadSeed();
+    } catch {
+      health = "down";
+      render();
+      return;
+    }
+    const savedId = sessionStorage.getItem("lumen-user");
+    if (token === "static" && savedId) {
+      const found = ledger.users.find((item) => item.id === savedId);
+      if (found) {
+        user = stripUser(found);
+        adoptState(withSession(ledger, found));
+        onHash();
+        return;
+      }
+    }
+    token = "";
+    render();
+    return;
+  }
+  mode = "server";
+  health = "ok";
+  if (token === "static") token = "";
   if (!token) {
     render();
     return;
@@ -602,6 +696,7 @@ async function boot() {
     onHash();
   } catch {
     health = "down";
+    token = "";
     render();
   }
 }

@@ -18,12 +18,14 @@ import { esc, formatDot, formatLong, roleLabel, todayISO } from "./util.js";
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
 export function renderLogin(ctx) {
-  const healthClass = ctx.health === "ok" ? "ok" : ctx.health === "down" ? "down" : "";
+  const healthClass = ctx.health === "ok" || ctx.health === "static" ? "ok" : ctx.health === "down" ? "down" : "";
   const healthText = ctx.health === "ok"
     ? "서버에 연결되었습니다. 이 주소로 팀 장부를 같이 봅니다."
-    : ctx.health === "down"
-      ? "서버가 응답하지 않습니다. design1-ops 폴더에서 node server.js 를 실행하고 http://127.0.0.1:4173 을 여세요."
-      : "서버 연결을 확인하고 있습니다.";
+    : ctx.health === "static"
+      ? "웹으로 열려 있습니다. 어디서든 접속되고, 수정은 이 브라우저에 저장됩니다."
+      : ctx.health === "down"
+        ? "장부를 열지 못했습니다. 주소를 다시 확인하세요."
+        : "연결을 확인하고 있습니다.";
   return `<div class="login">
     <section class="login-story">
       <div>
@@ -85,7 +87,7 @@ export function renderShell(ctx) {
     </aside>
     <div class="workspace">
       <header class="chrome">
-        <div class="crumbs">디자인1팀 / <b>${esc(crumb(ctx))}</b></div>
+        <div class="crumbs">디자인1팀 / <b>${esc(crumb(ctx))}</b>${ctx.mode === "static" ? `<span class="muted"> · 이 브라우저 저장</span>` : ""}</div>
         ${showWeek(ctx) ? `<select class="week" data-act="week-select">${ctx.state.weeks.map((item) => `<option value="${esc(item.id)}" ${item.id === week.id ? "selected" : ""}>${esc(item.label)}</option>`).join("")}</select>` : ""}
         <input id="q" class="search" placeholder="업무, 프로젝트, 요청자" value="${esc(ctx.ui.q || "")}">
         <div class="spacer"></div>
