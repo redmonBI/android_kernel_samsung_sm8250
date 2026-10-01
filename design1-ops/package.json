@@ -1,0 +1,8 @@
+{
+  "name": "lumen",
+  "private": true,
+  "description": "디자인1팀 주간 운영 장부",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
