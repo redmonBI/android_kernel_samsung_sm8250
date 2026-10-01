@@ -17,6 +17,58 @@ import { esc, formatDot, formatLong, roleLabel, todayISO } from "./util.js";
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
+export const PLUGIN_DEFS = [
+  { id: "inbox", label: "접수함", kind: "탭", blurb: "배정 전 요청만 모읍니다. 등록 칸을 늘리지 않습니다." },
+  { id: "projects", label: "프로젝트", kind: "탭", blurb: "같은 현장과 문서 이름을 한곳으로 묶습니다." },
+  { id: "calendar", label: "일정", kind: "탭", blurb: "종료 예정일을 달력에 놓습니다." },
+  { id: "load", label: "부하", kind: "탭·메인", blurb: "이번 주 담당 수용량을 봅니다." },
+  { id: "report", label: "보고", kind: "탭", blurb: "주간부터 연간까지 같은 장부로 집계합니다." },
+  { id: "review", label: "마감", kind: "탭", blurb: "기한, 정체, 산출물, 이월 순서로 주를 닫습니다." },
+  { id: "burndown", label: "잔여 추이", kind: "메인", blurb: "최근 8주 동안 보드에 남은 줄 수입니다." },
+  { id: "proof", label: "검수", kind: "메인", blurb: "산출물이 적혀 있고 아직 닫히지 않은 일을 모읍니다." },
+  { id: "together", label: "공동 담당", kind: "업무", blurb: "메인 담당은 한 명으로 두고, 함께 하는 사람을 덧붙입니다." },
+];
+
+const LAYOUT_DEFAULTS = {
+  nav: ["today", "inbox", "cycle", "projects", "calendar", "load", "report", "review"],
+  home: ["week", "kpis", "attention", "mine", "load", "burndown", "proof"],
+  plugins: {
+    inbox: true,
+    projects: true,
+    calendar: true,
+    load: true,
+    report: true,
+    review: true,
+    burndown: true,
+    proof: true,
+    together: false,
+  },
+};
+
+export function layoutOf(ctx) {
+  const team = ctx.state?.settings?.layout || {};
+  const personal = ctx.ui?.personalLayout || {};
+  const plugins = { ...LAYOUT_DEFAULTS.plugins, ...(team.plugins || {}), ...(personal.plugins || {}) };
+  const nav = sanitizeOrder(personal.nav || team.nav || LAYOUT_DEFAULTS.nav, LAYOUT_DEFAULTS.nav);
+  const home = sanitizeOrder(personal.home || team.home || LAYOUT_DEFAULTS.home, LAYOUT_DEFAULTS.home);
+  return { nav, home, plugins };
+}
+
+function sanitizeOrder(order, fallback) {
+  const seen = new Set();
+  const next = [];
+  for (const id of [...(order || []), ...fallback]) {
+    if (!fallback.includes(id) || seen.has(id)) continue;
+    seen.add(id);
+    next.push(id);
+  }
+  return next;
+}
+
+function pluginOn(ctx, id) {
+  return layoutOf(ctx).plugins[id] !== false;
+}
+
 export function renderLogin(ctx) {
   const healthClass = ctx.health === "ok" || ctx.health === "static" ? "ok" : ctx.health === "down" ? "down" : "";
   const healthText = ctx.health === "ok"
@@ -78,7 +130,7 @@ export function renderShell(ctx) {
   return `<div class="shell">
     <aside class="nav">
       <div class="brand"><small>DESIGN 1</small><div class="word">Lumen</div></div>
-      <div class="nav-scroll">${navItems(ctx).map(([id, label, count]) => `<button type="button" class="nav-item ${ctx.ui.view === id ? "on" : ""}" data-act="nav" data-view="${id}"><span>${esc(label)}</span>${count != null ? `<span class="nav-count">${count}</span>` : ""}</button>`).join("")}</div>
+      <div class="nav-scroll">${navItems(ctx).map(([id, label, count]) => `<button type="button" class="nav-item ${ctx.ui.view === id ? "on" : ""}" draggable="${id === "plugins" || id === "org" || id === "new" ? "false" : "true"}" data-drag="nav" data-drop="nav" data-id="${esc(id)}" data-act="nav" data-view="${id}"><span class="nav-name"><span class="grip">⠿</span>${esc(label)}</span>${count != null ? `<span class="nav-count">${count}</span>` : ""}</button>`).join("")}</div>
       <div class="nav-foot">
         <span class="avatar av-${esc(ctx.user.initials)}">${esc(ctx.user.initials)}</span>
         <span style="font-size:13px">${esc(ctx.user.name)}<br><span class="muted">${esc(roleLabel(ctx.user.role))}</span></span>
@@ -105,26 +157,37 @@ function navItems(ctx) {
   if (ctx.user.role === "requester") return [["today", "내 요청", visible(ctx).length], ["new", "접수", null]];
   const week = currentWeek(ctx);
   const board = tasksOnWeek(visible(ctx), week.id).map((task) => present(task, week.id));
-  const mine = board.filter((task) => task.assignee === ctx.user.initials && isOpenStatus(task.status)).length;
-  const triage = board.filter((task) => task.status === "시작전" || !task.assignee).length;
-  return [
-    ["today", "오늘", mine],
-    ["inbox", "접수함", triage],
-    ["cycle", "이번 주", board.length],
-    ["projects", "프로젝트", null],
-    ["calendar", "일정", null],
-    ["load", "부하", null],
-    ["report", "보고", null],
-    ["review", "마감", null],
-    ["org", "조직", null],
-  ];
+  const counts = {
+    today: board.filter((task) => isOpenStatus(task.status)).length,
+    inbox: board.filter((task) => task.status === "시작전" || !task.assignee).length,
+    cycle: board.length,
+  };
+  const labels = {
+    today: "금주",
+    inbox: "접수함",
+    cycle: "보드",
+    projects: "프로젝트",
+    calendar: "일정",
+    load: "부하",
+    report: "보고",
+    review: "마감",
+    org: "조직",
+    plugins: "플러그인",
+  };
+  const layout = layoutOf(ctx);
+  const ids = layout.nav.filter((id) => id === "today" || id === "cycle" || pluginOn(ctx, id));
+  if (!ids.includes("today")) ids.unshift("today");
+  ids.push("plugins");
+  if (ctx.user.role === "lead" || ctx.user.role === "executive" || ctx.user.role === "designer") ids.push("org");
+  return ids.map((id) => [id, labels[id] || id, counts[id] ?? null]);
 }
 
 function crumb(ctx) {
   return {
-    today: "오늘",
+    today: "금주",
     inbox: "접수함",
-    cycle: "이번 주",
+    cycle: "보드",
+    plugins: "플러그인",
     projects: "프로젝트",
     calendar: "일정",
     load: "부하",
@@ -185,6 +248,7 @@ function renderView(ctx) {
   if (ctx.ui.view === "report") return renderReport(ctx);
   if (ctx.ui.view === "review") return renderReview(ctx);
   if (ctx.ui.view === "org") return renderOrg(ctx);
+  if (ctx.ui.view === "plugins") return renderPlugins(ctx);
   if (ctx.ui.view === "new") return renderNew(ctx);
   if (ctx.ui.view === "work") return renderWorkPage(ctx);
   return renderToday(ctx);
@@ -199,29 +263,102 @@ function renderToday(ctx) {
   const week = currentWeek(ctx);
   const today = todayISO();
   const date = new Date(`${today}T00:00:00`);
+  const hint = date.getDay() === 1 ? "월요일입니다. 카드를 끌어 배정과 상태를 맞추면 주간 계획이 닫힙니다."
+    : date.getDay() === 3 ? "수요일입니다. 막힌 카드는 연결 열로 옮겨 두고 담당을 조정합니다."
+      : date.getDay() === 5 ? "금요일입니다. 산출물이 있는 카드만 종료로 옮깁니다."
+        : "카드는 끌어 상태를 바꿉니다. 블록 왼쪽 손잡이로 메인 순서를 바꿉니다.";
+  const blocks = {
+    week: () => weekHero(ctx),
+    kpis: () => kpiBlock(ctx),
+    attention: () => attentionBlock(ctx),
+    mine: () => mineBlock(ctx),
+    load: () => pluginOn(ctx, "load") ? `<section class="panel"><h2>담당 부하</h2>${loadRows(ctx).map((rowItem) => barRow(rowItem.name, rowItem.weight, rowItem.capacity)).join("")}</section>` : "",
+    burndown: () => pluginOn(ctx, "burndown") ? burndownBlock(ctx) : "",
+    proof: () => pluginOn(ctx, "proof") ? proofBlock(ctx) : "",
+  };
+  const html = layoutOf(ctx).home.map((id) => {
+    const inner = blocks[id]?.() || "";
+    if (!inner) return "";
+    return `<section class="dash-block ${id === "week" ? "dash-hero" : ""}" data-drop="block" data-id="${esc(id)}"><div class="grip" draggable="true" data-drag="block" data-id="${esc(id)}">⠿ 순서</div>${inner}</section>`;
+  }).join("");
+  return `${head("금주", week.label, `${date.getMonth() + 1}월 ${date.getDate()}일 ${WEEKDAYS[date.getDay()]}요일 · ${hint}`)}
+    ${html}`;
+}
+
+function weekHero(ctx) {
+  const tasks = boardOf(ctx).sort(sortTasks);
+  return `<div class="hero-head"><h2>금주 업무</h2><span class="muted">${tasks.length}줄 · 카드를 다른 열에 놓으면 상태가 바뀝니다</span></div>${phaseBoard(ctx, tasks)}`;
+}
+
+function kpiBlock(ctx) {
+  const week = currentWeek(ctx);
   const board = tasksOnWeek(visible(ctx), week.id).map((task) => present(task, week.id));
-  const mine = board.filter((task) => task.assignee === ctx.user.initials && isOpenStatus(task.status));
-  const late = board.filter((task) => isOpenStatus(task.status) && task.due && task.due < asOf(week));
+  const open = board.filter((task) => isOpenStatus(task.status));
+  const late = open.filter((task) => task.due && task.due < asOf(week));
   const stalled = board.filter((task) => isStalled(task, week.id, ctx.state.weeks));
   const done = board.filter((task) => task.status === "완료" || task.status === "완료(추가)");
-  const hint = date.getDay() === 1 ? "월요일입니다. 이월과 신규 접수를 배정하면 주간 계획이 닫힙니다."
-    : date.getDay() === 3 ? "수요일입니다. 막힌 일과 몰린 담당을 보면 중간 점검이 됩니다."
-      : date.getDay() === 5 ? "금요일입니다. 산출물을 확인하고 다음 주로 넘길 일을 정하세요."
-        : `${week.label} 보드를 기준으로 오늘 손댈 일을 골랐습니다.`;
-  return `${head("오늘", `${date.getMonth() + 1}월 ${date.getDate()}일 ${WEEKDAYS[date.getDay()]}요일`, hint)}
-    <section class="kpis">
-      ${kpi(mine.length, "내가 맡은 열린 일")}
-      ${kpi(late.length, "기한을 넘긴 일")}
-      ${kpi(stalled.length, "정체")}
-      ${kpi(done.length, "이번 주 종료")}
+  return `<section class="kpis">${kpi(open.length, "이번 주 열린 일")}${kpi(late.length, "기한을 넘긴 일")}${kpi(stalled.length, "정체")}${kpi(done.length, "이번 주 종료")}</section>`;
+}
+
+function mineBlock(ctx) {
+  const week = currentWeek(ctx);
+  const mine = tasksOnWeek(visible(ctx), week.id).map((task) => present(task, week.id)).filter((task) => task.assignee === ctx.user.initials && isOpenStatus(task.status));
+  return `<section class="panel"><h2>내 금주 일</h2>${mine.length ? mine.map((task) => row(task, ctx)).join("") : `<div class="empty">이번 주 보드에서 맡은 열린 일이 없습니다.</div>`}</section>`;
+}
+
+function attentionBlock(ctx) {
+  const items = attention(ctx);
+  return `<section class="panel"><h2>먼저 볼 금주 일</h2>${items.length ? items.map((item) => `<button class="mini" data-act="select" data-id="${esc(item.task.id)}" type="button" style="padding:8px 0;border-top:1px solid var(--line)"><b>${esc(item.tag)}</b> ${esc(item.task.project)}<div class="muted">${esc(item.task.assignee || "미배정")} · ${esc(formatDot(item.task.due))}</div></button>`).join("") : `<div class="empty">바로 손댈 위험이 없습니다.</div>`}</section>`;
+}
+
+function burndownBlock(ctx) {
+  const weeks = ctx.state.weeks.slice(-8);
+  const rows = weeks.map((week) => {
+    const tasks = tasksOnWeek(visible(ctx), week.id).map((task) => present(task, week.id));
+    return { label: week.label, open: tasks.filter((task) => isOpenStatus(task.status)).length, total: tasks.length };
+  });
+  const max = Math.max(...rows.map((rowItem) => rowItem.total), 1);
+  return `<section class="panel"><h2>잔여 추이</h2><div class="spark">${rows.map((rowItem) => `<div class="spark-col"><i style="height:${Math.max(8, Math.round((rowItem.open / max) * 100))}%"></i><span>${esc(rowItem.label.slice(0, 5))}</span><b>${rowItem.open}</b></div>`).join("")}</div><p class="muted">각 막대는 그 주 보드에 남아 있던 열린 줄입니다.</p></section>`;
+}
+
+function proofBlock(ctx) {
+  const week = currentWeek(ctx);
+  const tasks = tasksOnWeek(visible(ctx), week.id).map((task) => present(task, week.id)).filter((task) => isOpenStatus(task.status) && String(task.deliverable || task.progressNote || "").trim());
+  return `<section class="panel"><h2>확인할 산출물</h2>${tasks.length ? tasks.map((task) => row(task, ctx)).join("") : `<div class="empty">산출물이 적힌 진행 건이 없습니다.</div>`}</section>`;
+}
+
+function phaseBoard(ctx, tasks) {
+  return `<div class="board board-phase">${PHASES.map((phase) => {
+    const list = tasks.filter((task) => phaseOf(task.status) === phase.id);
+    return `<section class="board-col" data-drop="col" data-group="phase" data-value="${phase.id}"><h3>${esc(phase.label)} <span class="muted">${list.length}</span></h3>${list.map((task) => card(task, ctx)).join("") || `<div class="drop-hint">여기로 놓기</div>`}</section>`;
+  }).join("")}</div>`;
+}
+
+function card(task, ctx) {
+  return `<div class="card ${ctx.ui.selectedId === task.id ? "on" : ""}" draggable="true" data-drag="card" data-id="${esc(task.id)}" data-act="select" role="button" tabindex="0"><strong>${esc(task.project)}</strong><span class="clamp">${esc(task.summary)}</span><div class="muted" style="margin-top:6px">${esc(task.assignee || "미배정")} · ${esc(task.priority)}${pluginOn(ctx, "together") && task.helpers?.length ? ` · 함께 ${esc(task.helpers.join(" "))}` : ""}</div></div>`;
+}
+
+function renderPlugins(ctx) {
+  const layout = layoutOf(ctx);
+  const navLabels = { today: "금주", inbox: "접수함", cycle: "보드", projects: "프로젝트", calendar: "일정", load: "부하", report: "보고", review: "마감" };
+  const homeLabels = { week: "금주 업무", kpis: "금주 수치", attention: "먼저 볼 일", mine: "내 금주 일", load: "담당 부하", burndown: "잔여 추이", proof: "확인할 산출물" };
+  return `${head("플러그인", "화면 구성", "탭 위치와 메인 노출 순서를 바꿉니다. 끈 기능은 사이드바에서 빠집니다. 금주 화면은 항상 남습니다.")}
+    <section class="panel"><h2>플러그인</h2>
+      ${PLUGIN_DEFS.map((plugin) => `<label class="plugin-row"><input type="checkbox" data-act="plugin" data-plugin="${plugin.id}" ${layout.plugins[plugin.id] ? "checked" : ""}><span><b>${esc(plugin.label)}</b> <span class="muted">${esc(plugin.kind)}</span><span class="clamp">${esc(plugin.blurb)}</span></span></label>`).join("")}
     </section>
     <div class="home-grid">
-      <section class="panel"><h2>내 일</h2>${mine.length ? mine.map((task) => row(task, ctx)).join("") : `<div class="empty">이번 주 보드에서 맡은 열린 일이 없습니다.</div>`}</section>
-      <div>
-        <section class="panel"><h2>손댈 것</h2>${attention(ctx).map((item) => `<button class="mini" data-act="select" data-id="${esc(item.task.id)}" data-view="cycle" type="button" style="padding:8px 0;border-top:1px solid var(--line)"><b>${esc(item.tag)}</b> ${esc(item.task.project)}<div class="muted">${esc(item.task.assignee || "미배정")} · ${esc(formatDot(item.task.due))}</div></button>`).join("") || `<div class="empty">바로 손댈 위험이 없습니다.</div>`}</section>
-        <section class="panel"><h2>담당 부하</h2>${loadRows(ctx).map((rowItem) => barRow(rowItem.name, rowItem.weight, rowItem.capacity)).join("")}</section>
-      </div>
-    </div>`;
+      <section class="panel"><h2>탭 위치</h2><p class="muted">손잡이를 끌어 순서를 바꿉니다.</p>
+        ${layout.nav.map((id) => orderRow("nav", id, navLabels[id] || id)).join("")}
+      </section>
+      <section class="panel"><h2>메인 노출 순서</h2><p class="muted">위에 있을수록 금주 화면에서 먼저 보입니다.</p>
+        ${layout.home.map((id) => orderRow("home", id, homeLabels[id] || id)).join("")}
+      </section>
+    </div>
+    ${ctx.user.role === "lead" ? `<button class="btn primary" data-act="save-layout" type="button">이 배치를 팀 기본값으로 저장</button>` : ""}`;
+}
+
+function orderRow(list, id, label) {
+  return `<div class="order-row" draggable="true" data-drag="${list === "nav" ? "nav" : "block"}" data-drop="${list === "nav" ? "nav" : "block"}" data-id="${esc(id)}"><span class="grip">⠿</span><b>${esc(label)}</b><span class="order-move"><button type="button" class="btn quiet" data-act="reorder" data-list="${list}" data-id="${esc(id)}" data-dir="-1">위로</button><button type="button" class="btn quiet" data-act="reorder" data-list="${list}" data-id="${esc(id)}" data-dir="1">아래로</button></span></div>`;
 }
 
 function renderRequesterHome(ctx) {
@@ -369,14 +506,18 @@ function groupedRows(ctx, tasks) {
 function boardView(ctx, tasks) {
   const group = ctx.ui.group || "status";
   const map = new Map();
-  const order = group === "phase" ? PHASES.map((phase) => phase.label) : group === "status" ? STATUSES : [];
+  const preset = group === "phase" ? PHASES.map((phase) => phase.label) : group === "status" ? ["시작전", "대기중", "진행중", "수시체크", "재작업", "완료"] : group === "assignee" ? ["JH", "DE", "GY", "미배정"] : [];
   for (const task of tasks) {
     const key = groupOf(task, group);
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(task);
   }
-  const keys = [...new Set([...order.filter((key) => map.has(key)), ...map.keys()])];
-  return `<div class="board">${keys.map((key) => `<section class="board-col"><h3>${esc(key)} <span class="muted">${(map.get(key) || []).length}</span></h3>${(map.get(key) || []).map((task) => `<button class="card ${ctx.ui.selectedId === task.id ? "on" : ""}" data-act="select" data-id="${esc(task.id)}" type="button"><strong>${esc(task.project)}</strong><span class="clamp">${esc(task.summary)}</span><div class="muted" style="margin-top:6px">${esc(task.assignee || "미배정")} · ${esc(task.priority)}</div></button>`).join("")}</section>`).join("")}</div>`;
+  const keys = [...new Set([...preset, ...map.keys()])];
+  return `<div class="board">${keys.map((key) => {
+    const list = map.get(key) || [];
+    const value = group === "phase" ? (PHASES.find((phase) => phase.label === key)?.id || key) : key;
+    return `<section class="board-col" data-drop="col" data-group="${esc(group)}" data-value="${esc(value)}"><h3>${esc(key)} <span class="muted">${list.length}</span></h3>${list.map((task) => card(task, ctx)).join("") || `<div class="drop-hint">여기로 놓기</div>`}</section>`;
+  }).join("")}</div>`;
 }
 
 function issue(ctx, task, embedded) {
@@ -390,7 +531,7 @@ function issue(ctx, task, embedded) {
       <h2>${esc(draft.project || task.project)}</h2>
       <dl class="wh">
         <dt>누가 요청</dt><dd>${esc(draft.dept || "—")} · ${esc(draft.requester || "—")}</dd>
-        <dt>누가 수행</dt><dd>${esc(draft.assignee || "미배정")}</dd>
+        <dt>누가 수행</dt><dd>${esc(draft.assignee || "미배정")}${pluginOn(ctx, "together") && draft.helpers?.length ? ` · 함께 ${esc(draft.helpers.join(", "))}` : ""}</dd>
         <dt>언제</dt><dd>${esc(formatLong(draft.start))} – ${esc(formatLong(draft.due))}</dd>
         <dt>무엇을</dt><dd>${esc(draft.summary || "—")}</dd>
         <dt>어떻게</dt><dd>${esc((draft.workTypes || []).join(", ") || "—")}</dd>
@@ -434,6 +575,7 @@ function fieldsFrom(task, raw) {
     note: raw.note || "",
     progressNote: task.progressNote || "",
     newLog: "",
+    helpers: [...(raw.helpers || [])],
   };
 }
 
@@ -459,6 +601,7 @@ function workForm(ctx, draft) {
     <div class="prop"><span>요청 부서</span><select data-draft="dept">${options(depts, draft.dept, "선택")}</select></div>
     <div class="prop"><span>요청자</span><input data-draft="requester" value="${esc(draft.requester)}"></div>
     <div class="prop"><span>수행 담당</span><select data-draft="assignee" ${lock ? "disabled" : ""}>${options(people.map((id) => [id, id || "미배정"]), draft.assignee || "")}</select></div>
+    ${pluginOn(ctx, "together") ? `<div class="prop"><span>함께 하는 사람</span><div class="checks">${["JH", "DE", "GY"].filter((id) => id !== draft.assignee).map((id) => `<label><input type="checkbox" data-helper="${id}" ${(draft.helpers || []).includes(id) ? "checked" : ""}>${id}</label>`).join("")}</div></div>` : ""}
     <div class="prop"><span>상태</span><select data-draft="status" ${ctx.user.role === "requester" ? "disabled" : ""}>${options(STATUSES, draft.status)}</select></div>
     <div class="prop"><span>우선순위</span><select data-draft="priority">${options(PRIORITIES, draft.priority)}</select></div>
     <div class="prop"><span>시작일</span><input data-draft="start" type="date" value="${esc(draft.start || "")}"></div>

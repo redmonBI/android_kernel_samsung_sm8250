@@ -311,6 +311,26 @@ tr.hit:hover td { background: var(--surface); }
 .seg { display: flex; gap: 4px; background: var(--surface-2); border-radius: 9px; padding: 2px; }
 .seg button { border: 0; background: transparent; height: 28px; border-radius: 7px; padding: 0 10px; }
 .seg button.on { background: var(--surface); box-shadow: 0 1px 2px rgba(28, 25, 23, 0.06); }
+.grip { cursor: grab; color: var(--faint); font-size: 12px; user-select: none; }
+.nav-name { display: inline-flex; align-items: center; gap: 6px; }
+.nav-item .grip { color: var(--nav-dim); }
+.dragging { opacity: 0.4; }
+.drop-on { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.dash-block { margin-bottom: 12px; }
+.dash-hero { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 12px; }
+.hero-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; margin: 0 4px 8px; }
+.hero-head h2 { font-size: 18px; }
+.drop-hint { color: var(--faint); font-size: 12px; padding: 14px 4px; }
+.card { cursor: grab; }
+.plugin-row, .order-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--line); }
+.plugin-row input, .order-row { width: auto; }
+.order-row { align-items: center; cursor: grab; }
+.order-row b { flex: 1; }
+.order-move { display: flex; gap: 4px; }
+.spark { display: flex; align-items: flex-end; gap: 8px; height: 120px; }
+.spark-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; font-size: 10px; color: var(--muted); }
+.spark-col i { display: block; width: 100%; background: var(--accent); border-radius: 4px 4px 0 0; }
+.spark-col b { color: var(--ink); font-size: 12px; }
 
 @media (max-width: 980px) {
   .login, .home-grid, .split-view, .issue, .kpis, .people, .board { grid-template-columns: 1fr; }

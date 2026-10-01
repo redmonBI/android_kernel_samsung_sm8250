@@ -1,9 +1,9 @@
-import { CLOSED, present, validateDraft } from "./metrics.js";
+import { CLOSED, PHASES, present, validateDraft } from "./metrics.js";
 import { addDays, downloadText, formatDot, mondayOnOrAfter, roleLabel, todayISO, uid } from "./util.js";
-import { renderLogin, renderShell } from "./view.js";
+import { layoutOf, renderLogin, renderShell } from "./view.js";
 
 const app = document.querySelector("#app");
-const VIEWS = ["today", "inbox", "cycle", "projects", "calendar", "load", "report", "review", "org", "new", "work"];
+const VIEWS = ["today", "inbox", "cycle", "projects", "calendar", "load", "report", "review", "org", "plugins", "new", "work"];
 
 const ui = {
   view: "today",
@@ -28,6 +28,7 @@ const ui = {
   loginError: "",
   loginId: "",
   narrative: "",
+  personalLayout: null,
 };
 
 let state = null;
@@ -188,6 +189,79 @@ async function login(id, password) {
   }
 }
 
+function writePersonal(partial) {
+  ui.personalLayout = { ...(ui.personalLayout || {}), ...partial };
+  localStorage.setItem("lumen-personal-layout", JSON.stringify(ui.personalLayout));
+}
+
+function moveId(list, id, dir) {
+  const next = [...list];
+  const index = next.indexOf(id);
+  const target = index + Number(dir);
+  if (index < 0 || target < 0 || target >= next.length) return next;
+  const [item] = next.splice(index, 1);
+  next.splice(target, 0, item);
+  return next;
+}
+
+function placeBefore(list, id, beforeId) {
+  if (!id || !beforeId || id === beforeId) return list;
+  const next = list.filter((item) => item !== id);
+  const index = next.indexOf(beforeId);
+  if (index < 0) return list;
+  next.splice(index, 0, id);
+  return next;
+}
+
+async function moveTask(id, patch) {
+  const task = state.tasks.find((item) => item.id === id);
+  if (!task) return;
+  const shown = present(task, ui.weekId);
+  const allowed = user.role === "lead" || (user.role === "designer" && shown.assignee === user.initials);
+  if (!allowed) {
+    showToast("담당 업무만 옮길 수 있습니다.");
+    return;
+  }
+  if (("assignee" in patch || "dept" in patch) && user.role !== "lead") {
+    showToast("담당과 요청 부서는 팀장이 바꿉니다.");
+    return;
+  }
+  const status = patch.status;
+  if ((status === "완료" || status === "완료(추가)") && !String(task.deliverable || "").trim()) {
+    selectTask(id);
+    ui.formError = "종료하려면 산출물을 한 줄 남기세요.";
+    render();
+    return;
+  }
+  const snap = task.snapshots.find((item) => item.weekId === ui.weekId);
+  if (!snap) return;
+  const week = weekById(ui.weekId);
+  const latest = Math.max(...task.snapshots.map((item) => weekById(item.weekId)?.index || 0));
+  if (status) snap.status = status;
+  if ("assignee" in patch) snap.assignee = patch.assignee;
+  if ("dept" in patch) snap.dept = patch.dept;
+  if (week.index >= latest) {
+    if (status) task.status = status;
+    if ("assignee" in patch) task.assignee = patch.assignee;
+    if ("dept" in patch) task.dept = patch.dept;
+  }
+  task.updatedAt = todayISO();
+  audit(`${task.project} 이동`);
+  await saveState();
+  showToast("이번 주 보드에서 옮겼습니다.");
+}
+
+async function dropCard(id, group, value) {
+  if (group === "phase") {
+    const phase = PHASES.find((item) => item.id === value);
+    if (phase) await moveTask(id, { status: phase.statuses[0] });
+    return;
+  }
+  if (group === "status") return moveTask(id, { status: value });
+  if (group === "assignee") return moveTask(id, { assignee: value === "미배정" ? "" : value });
+  if (group === "dept") return moveTask(id, { dept: value });
+}
+
 function render() {
   const active = document.activeElement;
   const activeId = active?.id;
@@ -212,6 +286,9 @@ function readDraft(form) {
   form.querySelectorAll("[data-type]").forEach((field) => {
     if (field.checked) draft.workTypes.push(field.dataset.type);
   });
+  if (form.querySelector("[data-helper]")) {
+    draft.helpers = [...form.querySelectorAll("[data-helper]:checked")].map((field) => field.dataset.helper);
+  }
   return draft;
 }
 
@@ -237,6 +314,7 @@ function applyDraft(task, draft, creating) {
     note: draft.note || "",
     progressNote: draft.progressNote || "",
   };
+  if (Array.isArray(draft.helpers)) task.helpers = draft.helpers;
   if (editingLatest) Object.assign(task, next);
   task.updatedAt = todayISO();
   if (creating) {
@@ -305,6 +383,7 @@ function selectTask(id, view) {
     note: task.note || "",
     progressNote: shown.progressNote || "",
     newLog: "",
+    helpers: [...(task.helpers || [])],
   };
   if (view) ui.view = view;
   ui.palette = false;
@@ -503,6 +582,21 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (act === "print") return window.print();
+  if (act === "reorder") {
+    const layout = layoutOf(ctx());
+    const key = el.dataset.list === "nav" ? "nav" : "home";
+    writePersonal({ [key]: moveId(layout[key], el.dataset.id, el.dataset.dir) });
+    render();
+    return;
+  }
+  if (act === "save-layout" && user.role === "lead") {
+    const layout = layoutOf(ctx());
+    state.settings.layout = { nav: layout.nav, home: layout.home, plugins: layout.plugins };
+    audit("화면 배치를 팀 기본값으로 저장");
+    await saveState();
+    showToast("팀 기본 배치를 저장했습니다.");
+    return;
+  }
   if (act === "reset") {
     if (!confirm("현재 수정이 지워지고 시트에서 가져온 원장으로 돌아갑니다.")) return;
     adoptState(await api("/api/reset", { method: "POST" }));
@@ -543,6 +637,14 @@ document.addEventListener("change", async (event) => {
   if (target.dataset?.draft && ui.draft) {
     ui.draft[target.dataset.draft] = target.value;
     if (target.dataset.draft === "status") render();
+    return;
+  }
+  if (target.dataset?.act === "plugin") {
+    const layout = layoutOf(ctx());
+    const plugins = { ...layout.plugins, [target.dataset.plugin]: target.checked };
+    writePersonal({ plugins });
+    if (!target.checked && ui.view === target.dataset.plugin) ui.view = "today";
+    render();
     return;
   }
   if (target.dataset?.act === "role" && user.role === "lead") {
@@ -645,9 +747,58 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "c" && user.role !== "executive") go("new");
 });
 
+let activeDrag = null;
+
+document.addEventListener("dragstart", (event) => {
+  const item = event.target.closest("[data-drag]");
+  if (!item || item.getAttribute("draggable") === "false") return;
+  activeDrag = { kind: item.dataset.drag, id: item.dataset.id };
+  event.dataTransfer.setData("text/plain", JSON.stringify(activeDrag));
+  event.dataTransfer.effectAllowed = "move";
+  item.classList.add("dragging");
+});
+
+document.addEventListener("dragover", (event) => {
+  const zone = event.target.closest("[data-drop]");
+  if (!zone) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  document.querySelectorAll(".drop-on").forEach((el) => el.classList.remove("drop-on"));
+  zone.classList.add("drop-on");
+});
+
+document.addEventListener("drop", async (event) => {
+  const zone = event.target.closest("[data-drop]");
+  document.querySelectorAll(".drop-on, .dragging").forEach((el) => el.classList.remove("drop-on", "dragging"));
+  if (!zone || !user) return;
+  event.preventDefault();
+  let payload = activeDrag || {};
+  try {
+    const parsed = JSON.parse(event.dataTransfer.getData("text/plain") || "");
+    if (parsed?.kind) payload = parsed;
+  } catch { /* 브라우저가 드롭 데이터 읽기를 막으면 dragstart에 적어 둔 값을 씁니다. */ }
+  activeDrag = null;
+  if (payload.kind === "card" && zone.dataset.drop === "col") {
+    await dropCard(payload.id, zone.dataset.group, zone.dataset.value);
+    return;
+  }
+  if (payload.kind === "nav" && zone.dataset.drop === "nav") {
+    const layout = layoutOf(ctx());
+    writePersonal({ nav: placeBefore(layout.nav, payload.id, zone.dataset.id) });
+    render();
+    return;
+  }
+  if (payload.kind === "block" && zone.dataset.drop === "block") {
+    const layout = layoutOf(ctx());
+    writePersonal({ home: placeBefore(layout.home, payload.id, zone.dataset.id) });
+    render();
+  }
+});
+
 window.addEventListener("hashchange", onHash);
 
 async function boot() {
+  try { ui.personalLayout = JSON.parse(localStorage.getItem("lumen-personal-layout") || "null"); } catch { ui.personalLayout = null; }
   let serverUp = false;
   try {
     const response = await fetch(siteUrl("api/health"), { cache: "no-store" });
