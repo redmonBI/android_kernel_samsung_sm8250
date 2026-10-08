@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { randomId } from "./id.js";
 import {
   SHEET_ID,
   applyTodo,
@@ -182,12 +182,12 @@ export function ingestRows(state, rows, meta) {
     gid: meta.gid,
     tabName: meta.tabName,
     at: meta.at,
-    id: () => crypto.randomUUID(),
+    id: () => randomId(),
   });
   const changes = [];
   if (!state.sheetBaseline) {
     changes.push({
-      id: crypto.randomUUID(),
+      id: randomId(),
       at: meta.at,
       gid: meta.gid,
       tabName: meta.tabName,
@@ -205,7 +205,7 @@ export function ingestRows(state, rows, meta) {
   }
   if (createdWeek) {
     changes.unshift({
-      id: crypto.randomUUID(),
+      id: randomId(),
       at: meta.at,
       gid: meta.gid,
       tabName: meta.tabName,

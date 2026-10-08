@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { randomId, shortKey } from "./id.js";
 
 export const SHEET_ID = "1P7_T0UkuCXl9USkvgvLR52Ft7OMgl7OMSZe5e6TRuu0";
 export const FALLBACK_GID = "514547906";
@@ -151,7 +151,7 @@ export function mapHeader(header) {
 }
 
 function hashKey(value) {
-  return crypto.createHash("sha1").update(value).digest("hex").slice(0, 12);
+  return shortKey(value);
 }
 
 function clean(value) {
@@ -989,7 +989,7 @@ export function applyTodo(state, user, body, now) {
     const dueTime = /^\d{2}:\d{2}$/.test(body.dueTime || "") ? body.dueTime : "";
     const bucket = ["today", "week", "next", "later"].includes(body.bucket) ? body.bucket : "today";
     const todo = {
-      id: crypto.randomUUID(),
+      id: randomId(),
       userId: user.id,
       title: title.slice(0, 200),
       note: String(body.note || "").slice(0, 2000),

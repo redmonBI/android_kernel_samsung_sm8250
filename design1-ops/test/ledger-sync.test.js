@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyLive, buildLive, ingestRows } from "../lib/ledger-sync.js";
+import { applyLive, buildLive, ingestRows } from "../public/js/sheet/ledger-sync.js";
 
 const NOW = new Date("2026-10-08T09:00:00+09:00");
 const LEAD = { id: "jh", initials: "JH", role: "lead", name: "JH" };

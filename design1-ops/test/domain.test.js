@@ -10,7 +10,7 @@ import {
   parseDue,
   parseSheet,
   weekScore,
-} from "../lib/domain.js";
+} from "../public/js/sheet/domain.js";
 
 const NOW = new Date("2026-10-08T09:00:00+09:00");
 

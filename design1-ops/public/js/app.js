@@ -1,5 +1,7 @@
 import { CLOSED, PHASES, present, validateDraft } from "./metrics.js";
 import { addDays, downloadText, formatDot, mondayOnOrAfter, roleLabel, todayISO, uid } from "./util.js";
+import { applyLive, buildLive, ingestRows } from "./sheet/ledger-sync.js";
+import { pullLatestSheet } from "./sheet/pull.js";
 import { layoutOf, renderLogin, renderShell } from "./view.js";
 
 const app = document.querySelector("#app");
@@ -55,6 +57,16 @@ function stripUser(account) {
 
 function withSession(data, actor) {
   return { ...data, users: (data.users || []).map(stripUser), sessionUser: stripUser(actor) };
+}
+
+function publishLedger(actor) {
+  const { sheetBaseline, ...rest } = ledger;
+  return {
+    ...rest,
+    users: (ledger.users || []).map(stripUser),
+    sessionUser: stripUser(actor),
+    live: actor ? buildLive(ledger, actor, new Date()) : null,
+  };
 }
 
 function weekById(id) {
@@ -115,20 +127,56 @@ async function staticApi(path, options = {}) {
     if (user.role !== "lead") throw new Error("팀장만 원장을 되돌릴 수 있습니다.");
     ledger = await loadSeed();
     persistLedger();
-    return withSession(ledger, ledger.users.find((item) => item.id === user.id));
+    return publishLedger(ledger.users.find((item) => item.id === user.id));
+  }
+  if (path.endsWith("/live") && options.method === "POST") {
+    const outcome = applyLive(ledger, user, body, new Date()) || {};
+    persistLedger();
+    const payload = publishLedger(ledger.users.find((item) => item.id === user.id) || user);
+    payload.deleted = outcome.deleted || null;
+    return payload;
   }
   if (path.endsWith("/state") && options.method === "PUT") {
     const incoming = JSON.parse(options.body);
     delete incoming.sessionUser;
+    delete incoming.live;
     const users = (incoming.users || []).map((item) => {
       const prev = ledger.users.find((account) => account.id === item.id);
       return { ...(prev || {}), ...item, password: item.password || prev?.password || "" };
     });
-    ledger = { ...incoming, users };
+    ledger = {
+      ...ledger,
+      tasks: incoming.tasks || ledger.tasks,
+      weeks: incoming.weeks || ledger.weeks,
+      rituals: incoming.rituals ?? ledger.rituals,
+      settings: incoming.settings || ledger.settings,
+      requesters: incoming.requesters || ledger.requesters,
+      departments: incoming.departments || ledger.departments,
+      workTypes: incoming.workTypes || ledger.workTypes,
+      audit: incoming.audit || ledger.audit,
+      users,
+    };
     persistLedger();
-    return withSession(ledger, ledger.users.find((item) => item.id === user.id) || user);
+    return publishLedger(ledger.users.find((item) => item.id === user.id) || user);
   }
-  return withSession(ledger, ledger.users.find((item) => item.id === user.id) || user);
+  return publishLedger(ledger.users.find((item) => item.id === user.id) || user);
+}
+
+async function refreshSheet() {
+  if (mode !== "static" || !ledger) return;
+  try {
+    const pulled = await pullLatestSheet();
+    ingestRows(ledger, pulled.rows, { gid: pulled.gid, tabName: pulled.tabName, at: new Date().toISOString() });
+    if (ledger.sheet) ledger.sheet.error = "";
+  } catch {
+    ledger.sheet = ledger.sheet || { changes: [] };
+    ledger.sheet.error = "시트를 지금 읽지 못했습니다. 이 브라우저의 마지막 장부를 보여 줍니다.";
+  }
+  persistLedger();
+  if (user && !ui.focus && !ui.panel) {
+    adoptState(publishLedger(user));
+    render();
+  }
 }
 
 function adoptState(data) {
@@ -936,6 +984,11 @@ async function boot() {
     health = "static";
     try {
       ledger = JSON.parse(localStorage.getItem("lumen-ledger") || "null") || await loadSeed();
+      refreshSheet();
+      setInterval(() => {
+        if (ui.focus || ui.panel) return;
+        refreshSheet();
+      }, 45000);
     } catch {
       health = "down";
       render();
@@ -946,7 +999,7 @@ async function boot() {
       const found = ledger.users.find((item) => item.id === savedId);
       if (found) {
         user = stripUser(found);
-        adoptState(withSession(ledger, found));
+        adoptState(publishLedger(found));
         onHash();
         return;
       }

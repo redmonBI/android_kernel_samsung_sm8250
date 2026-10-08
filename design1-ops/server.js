@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { FALLBACK_GID, SHEET_ID, latestChecklist, parseSheet, parseTabList } from "./lib/domain.js";
-import { applyLive, ingestRows, publicLedger } from "./lib/ledger-sync.js";
+import { FALLBACK_GID, SHEET_ID, latestChecklist, parseSheet, parseTabList } from "./public/js/sheet/domain.js";
+import { applyLive, ingestRows, publicLedger } from "./public/js/sheet/ledger-sync.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, "public");

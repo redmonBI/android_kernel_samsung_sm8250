@@ -6,11 +6,9 @@
 
 장소와 상관없이 브라우저로 엽니다.
 
-https://virtual-hub-pr9yth5.shipstatic.com
+https://design1team-lumen.surge.sh
 
-로그인 화면에 “웹으로 열려 있습니다”가 보이면 접속된 것입니다. 이 무료 주소는 계정 없이 올린 배포라 3일 뒤 사라질 수 있습니다. 계속 쓰려면 이 링크에서 본인 계정으로 받으면 주소가 유지됩니다.
-
-https://my.shipstatic.com/claim/568811a2afeee874222f4e99c6e82e66
+로그인 화면에 “웹으로 열려 있습니다”가 보이면 접속된 것입니다. 이 주소는 Surge에 올린 사이트로, 며칠 만에 지워지지 않습니다. 한 달 넘게 접속이 없어도 그대로 열립니다.
 
 GitHub `gh-pages` 브랜치에도 같은 사이트가 올라가 있습니다. 저장소 Settings → Pages에서 브랜치를 `gh-pages`, 폴더를 `/ (root)`로 저장하면 아래 주소가 영구 주소가 됩니다.
 
