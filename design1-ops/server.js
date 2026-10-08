@@ -1,9 +1,12 @@
-const http = require("http");
-const fs = require("fs");
-const path = require("path");
-const crypto = require("crypto");
+import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { FALLBACK_GID, SHEET_ID, latestChecklist, parseSheet, parseTabList } from "./lib/domain.js";
+import { applyLive, ingestRows, publicLedger } from "./lib/ledger-sync.js";
 
-const ROOT = __dirname;
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, "public");
 const DATA = path.join(ROOT, "data");
 const SEED = path.join(DATA, "seed.json");
@@ -39,12 +42,17 @@ function writeState(data) {
 }
 
 function publicState(state, actor) {
-  const { password, ...sessionUser } = actor || {};
-  return {
-    ...state,
-    users: state.users.map(({ password: secret, ...user }) => user),
-    sessionUser,
-  };
+  return publicLedger(state, actor, new Date());
+}
+
+function keepServer(next, current) {
+  next.sheet = current.sheet || null;
+  next.sheetBaseline = current.sheetBaseline || null;
+  next.sheetRevision = current.sheetRevision || 0;
+  next.checks = current.checks || {};
+  next.todos = current.todos || [];
+  next.liveSettings = current.liveSettings || null;
+  return next;
 }
 
 function send(res, code, body, type = "application/json; charset=utf-8") {
@@ -121,6 +129,11 @@ function mergeUsers(current, incoming, actor) {
 }
 
 function sanitize(current, incoming, actor) {
+  if ((incoming.sheetRevision || 0) !== (current.sheetRevision || 0)) {
+    const error = new Error("시트가 방금 갱신되었습니다. 최신 장부를 다시 엽니다.");
+    error.status = 409;
+    throw error;
+  }
   const next = {
     meta: current.meta,
     users: current.users,
@@ -146,7 +159,7 @@ function sanitize(current, incoming, actor) {
     next.workTypes = Array.isArray(incoming.workTypes) ? incoming.workTypes : current.workTypes;
     next.users = mergeUsers(current.users, incoming.users, actor);
     next.audit = Array.isArray(incoming.audit) ? incoming.audit.slice(-400) : current.audit;
-    return next;
+    return keepServer(next, current);
   }
 
   const previous = new Map(current.tasks.map((task) => [task.id, task]));
@@ -197,7 +210,34 @@ function sanitize(current, incoming, actor) {
   }
   next.tasks = kept;
   if (Array.isArray(incoming.audit)) next.audit = incoming.audit.slice(-400);
-  return next;
+  return keepServer(next, current);
+}
+
+async function syncFromSheet() {
+  const state = ensureState();
+  try {
+    const page = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(20000),
+    });
+    const tabs = parseTabList(await page.text());
+    const latest = latestChecklist(tabs);
+    const gid = latest?.gid || state.sheet?.gid || FALLBACK_GID;
+    const csvResponse = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(20000),
+    });
+    const csv = await csvResponse.text();
+    if (!csvResponse.ok || /<!DOCTYPE html/i.test(csv.slice(0, 180))) throw new Error("시트를 읽지 못했습니다.");
+    const parsed = parseSheet(csv);
+    const tabName = tabs.find((tab) => tab.gid === gid)?.name || latest?.name || "";
+    ingestRows(state, parsed.rows, { gid, tabName, at: new Date().toISOString() });
+  } catch (error) {
+    state.sheet = state.sheet || { changes: [] };
+    state.sheet.error = "시트를 지금 읽지 못했습니다. 마지막 장부를 보여 줍니다.";
+    console.error("sheet", error.message);
+  }
+  writeState(state);
 }
 
 const TYPES = {
@@ -270,6 +310,18 @@ const server = http.createServer((req, res) => {
         return send(res, 200, JSON.stringify(publicState(next, actor)));
       }
 
+      if (url.pathname === "/api/live" && req.method === "POST") {
+        const state = ensureState();
+        const actor = actorFrom(req, state);
+        if (!actor) return send(res, 401, JSON.stringify({ error: "로그인이 필요합니다." }));
+        const body = await readBody(req);
+        const outcome = applyLive(state, actor, body, new Date()) || {};
+        writeState(state);
+        const payload = publicState(state, actor);
+        payload.deleted = outcome.deleted || null;
+        return send(res, 200, JSON.stringify(payload));
+      }
+
       let pathname = decodeURIComponent(url.pathname);
       if (pathname === "/") pathname = "/index.html";
       const file = path.normalize(path.join(PUBLIC, pathname));
@@ -284,7 +336,7 @@ const server = http.createServer((req, res) => {
       });
       fs.createReadStream(file).pipe(res);
     } catch (error) {
-      if (!res.headersSent) send(res, 500, JSON.stringify({ error: "요청을 처리하지 못했습니다." }));
+      if (!res.headersSent) send(res, error.status || 500, JSON.stringify({ error: error.status ? error.message : "요청을 처리하지 못했습니다." }));
     }
   }).catch(() => {
     if (!res.headersSent) send(res, 500, JSON.stringify({ error: "요청을 처리하지 못했습니다." }));
@@ -296,4 +348,6 @@ server.listen(PORT, HOST, () => {
   console.log(`LUMEN ready`);
   console.log(`  local   http://127.0.0.1:${PORT}`);
   console.log(`  network http://0.0.0.0:${PORT}`);
+  enqueue(() => syncFromSheet());
+  setInterval(() => enqueue(() => syncFromSheet()), Number(process.env.POLL_MS || 45000));
 });

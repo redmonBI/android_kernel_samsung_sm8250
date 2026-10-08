@@ -150,6 +150,7 @@ export function renderShell(ctx) {
     </div>
   </div>
   ${ctx.ui.palette ? renderPalette(ctx) : ""}
+  ${liveDialog(ctx)}
   ${ctx.ui.toast ? `<div class="toast" role="status">${esc(ctx.ui.toast)}</div>` : ""}`;
 }
 
@@ -179,7 +180,13 @@ function navItems(ctx) {
   if (!ids.includes("today")) ids.unshift("today");
   ids.push("plugins");
   if (ctx.user.role === "lead" || ctx.user.role === "executive" || ctx.user.role === "designer") ids.push("org");
-  return ids.map((id) => [id, labels[id] || id, counts[id] ?? null]);
+  ids.push("live", "todos");
+  const live = ctx.state.live;
+  return ids.map((id) => {
+    if (id === "live") return [id, "시트 알림", live?.counts?.changes || null];
+    if (id === "todos") return [id, "내 할 일", live?.counts?.todos || null];
+    return [id, labels[id] || id, counts[id] ?? null];
+  });
 }
 
 function crumb(ctx) {
@@ -196,6 +203,8 @@ function crumb(ctx) {
     org: "조직",
     new: "접수",
     work: "업무",
+    live: "시트 알림",
+    todos: "내 할 일",
   }[ctx.ui.view] || "오늘";
 }
 
@@ -251,6 +260,8 @@ function renderView(ctx) {
   if (ctx.ui.view === "plugins") return renderPlugins(ctx);
   if (ctx.ui.view === "new") return renderNew(ctx);
   if (ctx.ui.view === "work") return renderWorkPage(ctx);
+  if (ctx.ui.view === "live") return renderLive(ctx);
+  if (ctx.ui.view === "todos") return renderTodos(ctx);
   return renderToday(ctx);
 }
 
@@ -282,7 +293,129 @@ function renderToday(ctx) {
     return `<section class="dash-block ${id === "week" ? "dash-hero" : ""}" data-drop="block" data-id="${esc(id)}"><div class="grip" draggable="true" data-drag="block" data-id="${esc(id)}">⠿ 순서</div>${inner}</section>`;
   }).join("");
   return `${head("금주", week.label, `${date.getMonth() + 1}월 ${date.getDate()}일 ${WEEKDAYS[date.getDay()]}요일 · ${hint}`)}
+    ${sheetBanner(ctx)}
     ${html}`;
+}
+
+function sheetBanner(ctx) {
+  const live = ctx.state.live;
+  if (!live) return "";
+  const bits = [];
+  if (live.error) bits.push(`<div class="banner bad">${esc(live.error)}</div>`);
+  if (live.counts.changes) bits.push(`<div class="banner">시트에 확인하지 않은 변경이 ${live.counts.changes}건 있습니다. <button class="btn tiny" type="button" data-act="nav" data-view="live">알림 보기</button></div>`);
+  if (live.reminders?.length) bits.push(`<section class="panel"><h2>시트 마감 체크 ${live.reminders.length}</h2>${live.reminders.slice(0, 6).map((item) => `<div class="live-row"><span><span class="prio prio-${esc(item.priority)}">${esc(item.reminderLabel)}</span> <strong>${esc(item.project)}</strong> <span class="muted">${esc(item.dueLabel)} · ${esc(item.assignee || "미배정")}</span></span><button class="btn tiny" type="button" data-act="focus-live" data-source="task" data-ref="${esc(item.id)}">체크</button></div>`).join("")}</section>`);
+  if (live.insights?.length) bits.push(`<section class="panel"><h2>시트에서 본 분장</h2>${live.insights.map((line) => `<p>${esc(line)}</p>`).join("")}</section>`);
+  return bits.join("");
+}
+
+function renderLive(ctx) {
+  const live = ctx.state.live;
+  if (!live) return `${head("시트", "아직 연결 전", "서버가 주간 시트를 읽는 동안입니다.")}`;
+  const settings = live.settings || {};
+  const changes = (live.changes || []).filter((change) => change.kind !== "touched");
+  return `${head("시트", live.tabName || "주간 시트", "구글 시트가 원본입니다. 여기서 고른 완료와 일정은 장부에 남고, 시트와 다르면 표시됩니다.")}
+    <div class="page-tools" style="margin-bottom:12px"><a class="btn" href="${esc(live.url || "#")}" target="_blank" rel="noreferrer">시트 열기</a></div>
+    ${live.insights?.length ? `<section class="panel">${live.insights.map((line) => `<p>${esc(line)}</p>`).join("")}</section>` : ""}
+    <section class="panel"><h2>변경</h2>
+      ${changes.length ? changes.map((change) => `<article class="panel" style="margin-top:8px"><b>${esc(change.summary)}</b><div class="muted">${esc(change.kind)}</div>${change.seen ? "" : `<button class="btn tiny" type="button" data-act="live-ack" data-id="${esc(change.id)}">확인했습니다</button>`}</article>`).join("") : `<div class="empty">연결 이후의 변경이 없습니다.</div>`}
+      ${live.counts.changes ? `<button class="btn" type="button" data-act="live-ack" data-all="1">모두 확인</button>` : ""}
+    </section>
+    ${ctx.user.role === "lead" ? `<form id="live-settings" class="panel"><h2>알림 기준</h2>
+      <label>하루 전 (시간)<input name="dayLeadHours" type="number" min="1" max="168" value="${esc(settings.dayLeadHours)}"></label>
+      <label>한 시간 전 (분)<input name="hourLeadMinutes" type="number" min="5" max="1440" value="${esc(settings.hourLeadMinutes)}"></label>
+      <label>날짜만 있을 때<input name="dateOnlyTime" type="time" value="${esc(settings.dateOnlyTime)}"></label>
+      <label><input name="popupUrgent" type="checkbox" ${settings.popupUrgent ? "checked" : ""}>긴급 업무는 기한이 가까우면 팝업</label>
+      <button class="btn primary" type="submit">기준 저장</button>
+    </form>` : ""}`;
+}
+
+function renderTodos(ctx) {
+  const live = ctx.state.live;
+  const todos = live?.todos || { today: [], week: [], next: [], later: [], done: [] };
+  const column = (title, items) => `<section class="panel"><h2>${title} ${items.length}</h2>${items.length ? items.map(todoCard).join("") : `<div class="empty">비어 있습니다.</div>`}</section>`;
+  return `${head("할 일", "시트 밖의 내 일", "오늘, 이번 주, 다음 주로 옮깁니다. 중요로 표시하면 팝업에서 완료·재확인·일정 변경 중 하나를 골라야 합니다.")}
+    <form id="todo-form" class="panel" style="display:grid;gap:8px">
+      <label>할 일<input id="todo-title" name="title" required placeholder="예: 견적 회신"></label>
+      <label>메모<input name="note"></label>
+      <div class="filters" style="display:flex;gap:8px;flex-wrap:wrap">
+        <label>날짜<input name="dueDate" type="date"></label>
+        <label>시간<input name="dueTime" type="time"></label>
+        <label>위치<select name="bucket"><option value="today">오늘</option><option value="week">이번 주</option><option value="next">다음 주</option><option value="later">나중</option></select></label>
+        <label><input name="important" type="checkbox">중요 팝업</label>
+      </div>
+      <button class="btn primary" type="submit">등록</button>
+    </form>
+    <div class="home-grid">
+      ${column("오늘", todos.today)}${column("이번 주", todos.week)}${column("다음 주", todos.next)}${column("나중", todos.later)}
+    </div>
+    ${todos.done?.length ? `<section class="panel"><h2>최근 완료</h2>${todos.done.map((todo) => `<div class="live-row"><strong>${esc(todo.title)}</strong><button class="btn tiny" type="button" data-act="todo-status" data-id="${esc(todo.id)}" data-status="open">다시 열기</button></div>`).join("")}</section>` : ""}`;
+}
+
+function todoCard(todo) {
+  return `<article class="panel" style="margin-top:8px${todo.important ? ";box-shadow:inset 3px 0 0 var(--danger)" : ""}">
+    <strong>${esc(todo.title)}</strong>
+    <div class="muted">${esc(todo.dueLabel || "")}${todo.reminderLabel ? ` · ${esc(todo.reminderLabel)}` : ""}${todo.note ? ` · ${esc(todo.note)}` : ""}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+      <button class="btn tiny" type="button" data-act="todo-status" data-id="${esc(todo.id)}" data-status="done">완료</button>
+      <button class="btn tiny" type="button" data-act="todo-status" data-id="${esc(todo.id)}" data-status="${todo.status === "doing" ? "open" : "doing"}">${todo.status === "doing" ? "대기" : "진행중"}</button>
+      <button class="btn tiny" type="button" data-act="focus-live" data-source="todo" data-ref="${esc(todo.id)}">체크</button>
+      <button class="btn tiny" type="button" data-act="todo-move" data-id="${esc(todo.id)}" data-bucket="today">오늘</button>
+      <button class="btn tiny" type="button" data-act="todo-move" data-id="${esc(todo.id)}" data-bucket="week">이번 주</button>
+      <button class="btn tiny" type="button" data-act="todo-move" data-id="${esc(todo.id)}" data-bucket="next">다음 주</button>
+      <button class="btn tiny" type="button" data-act="todo-flag" data-id="${esc(todo.id)}" data-important="${todo.important ? "0" : "1"}">${todo.important ? "중요 해제" : "중요"}</button>
+      <button class="btn tiny" type="button" data-act="todo-delete" data-id="${esc(todo.id)}">삭제</button>
+    </div>
+  </article>`;
+}
+
+function liveDialog(ctx) {
+  const live = ctx.state.live;
+  if (!live) return "";
+  let item = null;
+  let voluntary = false;
+  if (ctx.ui.focus?.source === "task") {
+    const task = (ctx.state.tasks || []).find((entry) => entry.id === ctx.ui.focus.ref);
+    const forced = live.blocking.find((entry) => entry.source === "task" && entry.ref === ctx.ui.focus.ref);
+    if (task) {
+      item = forced || {
+        source: "task", ref: task.id, label: "체크", title: task.project, priority: task.priority,
+        lines: [task.summary, task.assignee, task.due].filter(Boolean),
+      };
+      voluntary = !forced;
+    }
+  } else if (ctx.ui.focus?.source === "todo") {
+    const todos = ["today", "week", "next", "later", "done"].flatMap((key) => live.todos?.[key] || []);
+    const todo = todos.find((entry) => entry.id === ctx.ui.focus.ref);
+    const forced = live.blocking.find((entry) => entry.source === "todo" && entry.ref === ctx.ui.focus.ref);
+    if (todo) {
+      item = forced || { source: "todo", ref: todo.id, label: "체크", title: todo.title, priority: "", lines: [todo.note, todo.dueLabel].filter(Boolean) };
+      voluntary = !forced;
+    }
+  } else if (live.blocking?.length) {
+    item = live.blocking[0];
+  }
+  if (!item) return "";
+  const reschedule = ctx.ui.panel === "reschedule";
+  const isChange = item.source === "change";
+  return `<div class="scrim" role="dialog" aria-modal="true"><div class="dialog ${voluntary ? "" : "block"}">
+    <div class="kicker">${esc(item.label || "확인")} · ${live.blocking.length || 1}건</div>
+    <h2>${esc(item.title)}</h2>
+    ${(item.lines || []).map((line) => `<p>${esc(line)}</p>`).join("")}
+    ${isChange ? `<div class="choice"><button class="btn primary" type="button" data-act="live-ack" data-id="${esc(item.ref)}">확인했습니다</button></div>` : `<div class="choice">
+      <button class="btn primary" type="button" data-act="live-done" data-source="${esc(item.source)}" data-ref="${esc(item.ref)}">완료</button>
+      <button class="btn" type="button" data-act="live-snooze" data-source="${esc(item.source)}" data-ref="${esc(item.ref)}" data-mode="1h">1시간 뒤 재확인</button>
+      <button class="btn" type="button" data-act="live-snooze" data-source="${esc(item.source)}" data-ref="${esc(item.ref)}" data-mode="tomorrow">내일 아침 재확인</button>
+      <button class="btn" type="button" data-act="live-panel" data-source="${esc(item.source)}" data-ref="${esc(item.ref)}">일정 변경</button>
+      ${voluntary ? `<button class="btn quiet" type="button" data-act="close-focus">닫기</button>` : ""}
+    </div>`}
+    ${reschedule && !isChange ? `<form id="reschedule-form" class="stack" data-source="${esc(item.source)}" data-ref="${esc(item.ref)}">
+      <label>날짜<input id="move-date" name="date" type="date" required></label>
+      <label>시간<input id="move-time" name="time" type="time"></label>
+      <label>이유<input id="move-note" name="note"></label>
+      <button class="btn primary" type="submit">이 일정으로 변경</button>
+    </form>` : ""}
+    ${voluntary ? "" : `<button class="btn" type="button" data-act="live-defer">한 시간 뒤에 다시 보기</button>`}
+  </div></div>`;
 }
 
 function weekHero(ctx) {

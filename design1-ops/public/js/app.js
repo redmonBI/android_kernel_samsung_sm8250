@@ -3,7 +3,7 @@ import { addDays, downloadText, formatDot, mondayOnOrAfter, roleLabel, todayISO,
 import { layoutOf, renderLogin, renderShell } from "./view.js";
 
 const app = document.querySelector("#app");
-const VIEWS = ["today", "inbox", "cycle", "projects", "calendar", "load", "report", "review", "org", "plugins", "new", "work"];
+const VIEWS = ["today", "inbox", "cycle", "projects", "calendar", "load", "report", "review", "org", "plugins", "new", "work", "live", "todos"];
 
 const ui = {
   view: "today",
@@ -27,8 +27,12 @@ const ui = {
   paletteQ: "",
   loginError: "",
   loginId: "",
+  loginPw: "",
   narrative: "",
   personalLayout: null,
+  focus: null,
+  panel: "",
+  followSheet: true,
 };
 
 let state = null;
@@ -71,6 +75,11 @@ async function api(path, options = {}) {
   if (response.status === 401 && path !== "/api/login") {
     logout(false);
     throw new Error(data.error || "로그인이 필요합니다.");
+  }
+  if (response.status === 409) {
+    await loadState();
+    render();
+    throw new Error(data.error || "시트가 갱신되었습니다.");
   }
   if (!response.ok) throw new Error(data.error || "요청을 처리하지 못했습니다.");
   return data;
@@ -125,8 +134,11 @@ async function staticApi(path, options = {}) {
 function adoptState(data) {
   user = data.sessionUser || user;
   delete data.sessionUser;
+  delete data.deleted;
   state = data;
-  if (!ui.weekId || !state.weeks.some((week) => week.id === ui.weekId)) {
+  if (state.live?.weekId && ui.followSheet !== false && state.weeks.some((week) => week.id === state.live.weekId)) {
+    ui.weekId = state.live.weekId;
+  } else if (!ui.weekId || !state.weeks.some((week) => week.id === ui.weekId)) {
     ui.weekId = state.weeks[state.weeks.length - 1].id;
   }
   const week = weekById(ui.weekId);
@@ -601,6 +613,73 @@ document.addEventListener("click", async (event) => {
     if (!confirm("현재 수정이 지워지고 시트에서 가져온 원장으로 돌아갑니다.")) return;
     adoptState(await api("/api/reset", { method: "POST" }));
     showToast("원본 원장으로 되돌렸습니다.");
+    return;
+  }
+  if (act === "focus-live") {
+    ui.focus = { source: el.dataset.source, ref: el.dataset.ref };
+    ui.panel = "";
+    render();
+    return;
+  }
+  if (act === "close-focus") {
+    ui.focus = null;
+    ui.panel = "";
+    render();
+    return;
+  }
+  if (act === "live-panel") {
+    ui.panel = ui.panel === "reschedule" ? "" : "reschedule";
+    if (el.dataset.ref) ui.focus = { source: el.dataset.source || "task", ref: el.dataset.ref };
+    render();
+    return;
+  }
+  if (act === "live-defer") {
+    ui.focus = null;
+    ui.panel = "";
+    adoptState(await api("/api/live", { method: "POST", body: JSON.stringify({ type: "defer" }) }));
+    showToast("한 시간 뒤에 다시 띄웁니다.");
+    return;
+  }
+  if (act === "live-ack") {
+    adoptState(await api("/api/live", { method: "POST", body: JSON.stringify({ type: "ack", id: el.dataset.id, all: el.dataset.all === "1" }) }));
+    if (ui.focus?.source === "change") ui.focus = null;
+    render();
+    return;
+  }
+  if (act === "live-done" || act === "live-snooze" || act === "live-flag") {
+    const source = el.dataset.source || "task";
+    const ref = el.dataset.ref || el.dataset.id;
+    if (source === "todo" && act === "live-done") {
+      adoptState(await api("/api/live", { method: "POST", body: JSON.stringify({ type: "todo", action: "status", id: ref, status: "done" }) }));
+    } else if (source === "todo" && act === "live-snooze") {
+      adoptState(await api("/api/live", { method: "POST", body: JSON.stringify({ type: "todo", action: "snooze", id: ref, mode: el.dataset.mode }) }));
+    } else if (act === "live-flag") {
+      adoptState(await api("/api/live", { method: "POST", body: JSON.stringify({ type: "check", action: "flag", id: ref, important: el.dataset.important === "1" }) }));
+    } else if (act === "live-snooze") {
+      adoptState(await api("/api/live", { method: "POST", body: JSON.stringify({ type: "check", action: "snooze", id: ref, mode: el.dataset.mode }) }));
+    } else {
+      adoptState(await api("/api/live", { method: "POST", body: JSON.stringify({ type: "check", action: "done", id: ref }) }));
+    }
+    ui.focus = null;
+    ui.panel = "";
+    showToast(act === "live-done" ? "완료로 표시했습니다. 시트 상태도 완료로 고쳐 주세요." : "재확인할 시간을 잡아 두었습니다.");
+    return;
+  }
+  if (act === "todo-status" || act === "todo-move" || act === "todo-flag" || act === "todo-delete") {
+    const payload = { type: "todo", id: el.dataset.id };
+    if (act === "todo-status") Object.assign(payload, { action: "status", status: el.dataset.status });
+    if (act === "todo-move") Object.assign(payload, { action: "move", bucket: el.dataset.bucket });
+    if (act === "todo-flag") Object.assign(payload, { action: "flag", important: el.dataset.important === "1" });
+    if (act === "todo-delete") {
+      payload.action = "delete";
+      const data = await api("/api/live", { method: "POST", body: JSON.stringify(payload) });
+      ui.undo = data.deleted || null;
+      adoptState(data);
+      showToast("할 일을 삭제했습니다.");
+      return;
+    }
+    adoptState(await api("/api/live", { method: "POST", body: JSON.stringify(payload) }));
+    render();
   }
 });
 
@@ -613,6 +692,7 @@ document.addEventListener("change", async (event) => {
     return;
   }
   if (target.dataset?.act === "week-select") {
+    ui.followSheet = false;
     ui.weekId = target.value;
     const week = weekById(ui.weekId);
     ui.cal = { year: Number(week.start.slice(0, 4)), month: Number(week.start.slice(5, 7)) };
@@ -724,6 +804,51 @@ document.addEventListener("submit", async (event) => {
     for (const id of ["JH", "DE", "GY"]) state.settings.capacity[id] = Number(form.get(id));
     await saveState();
     showToast("수용량을 저장했습니다.");
+    return;
+  }
+  if (formKey === "todo-form") {
+    const form = new FormData(event.target);
+    adoptState(await api("/api/live", { method: "POST", body: JSON.stringify({
+      type: "todo",
+      action: "create",
+      title: form.get("title"),
+      note: form.get("note"),
+      dueDate: form.get("dueDate"),
+      dueTime: form.get("dueTime"),
+      bucket: form.get("bucket"),
+      important: form.get("important") === "on",
+    }) }));
+    showToast("할 일을 등록했습니다.");
+    return;
+  }
+  if (formKey === "reschedule-form") {
+    const form = new FormData(event.target);
+    const source = event.target.dataset.source;
+    const ref = event.target.dataset.ref;
+    if (source === "todo") {
+      adoptState(await api("/api/live", { method: "POST", body: JSON.stringify({
+        type: "todo", action: "reschedule", id: ref, date: form.get("date"), dueTime: form.get("time"), note: form.get("note"),
+      }) }));
+    } else {
+      adoptState(await api("/api/live", { method: "POST", body: JSON.stringify({
+        type: "check", action: "reschedule", id: ref, date: form.get("date"), time: form.get("time"), note: form.get("note"),
+      }) }));
+    }
+    ui.focus = null;
+    ui.panel = "";
+    showToast("일정을 바꿨습니다. 시트에도 같은 날짜를 적어 주세요.");
+    return;
+  }
+  if (formKey === "live-settings") {
+    const form = new FormData(event.target);
+    adoptState(await api("/api/live", { method: "POST", body: JSON.stringify({
+      type: "settings",
+      dayLeadHours: Number(form.get("dayLeadHours")),
+      hourLeadMinutes: Number(form.get("hourLeadMinutes")),
+      dateOnlyTime: form.get("dateOnlyTime"),
+      popupUrgent: form.get("popupUrgent") === "on",
+    }) }));
+    showToast("알림 기준을 저장했습니다.");
   }
 });
 
@@ -845,6 +970,13 @@ async function boot() {
       return;
     }
     onHash();
+    setInterval(() => {
+      if (!token || !state || mode !== "server") return;
+      if (state.live?.blocking?.length || ui.focus || ui.panel) return;
+      const active = document.activeElement;
+      if (active && ["INPUT", "TEXTAREA"].includes(active.tagName)) return;
+      loadState().then(() => render()).catch(() => {});
+    }, 15000);
   } catch {
     health = "down";
     token = "";
