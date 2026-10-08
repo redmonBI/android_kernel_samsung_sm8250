@@ -1,28 +1,20 @@
-import crypto from "node:crypto";
-import fs from "node:fs";
 import http from "node:http";
+import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import * as domain from "./lib/domain.js";
+import { FALLBACK_GID, SHEET_ID, latestChecklist, parseSheet, parseTabList } from "./lib/domain.js";
+import { applyLive, ingestRows, publicLedger } from "./lib/ledger-sync.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, "public");
 const DATA = path.join(ROOT, "data");
-const STATE_FILE = path.join(DATA, "state.json");
+const SEED = path.join(DATA, "seed.json");
+const STATE = path.join(DATA, "state.json");
 const PORT = Number(process.env.PORT || 4173);
 const HOST = process.env.HOST || "0.0.0.0";
-const POLL_MS = Number(process.env.POLL_MS || 45000);
-
-const TYPES = {
-  ".html": "text/html; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".json": "application/json; charset=utf-8",
-};
 
 const sessions = new Map();
-let state = loadState();
 let queue = Promise.resolve();
 
 function enqueue(fn) {
@@ -31,136 +23,43 @@ function enqueue(fn) {
   return run;
 }
 
-function loadState() {
-  try {
-    if (fs.existsSync(STATE_FILE)) {
-      const saved = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-      const fresh = domain.freshState();
-      saved.users = domain.USERS.map((seed) => {
-        const prev = (saved.users || []).find((user) => user.id === seed.id);
-        return { ...seed, ...(prev || {}), role: seed.role, password: prev?.password || seed.password };
-      });
-      saved.settings = { ...fresh.settings, ...(saved.settings || {}) };
-      saved.sheet = { ...fresh.sheet, ...(saved.sheet || {}) };
-      saved.baselines = saved.baselines || {};
-      saved.baselineOrder = saved.baselineOrder || [];
-      saved.changes = saved.changes || [];
-      saved.decisions = saved.decisions || {};
-      saved.todos = saved.todos || [];
-      return saved;
-    }
-  } catch (error) {
-    console.error("state reset", error.message);
+function readJson(file) {
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+function ensureState() {
+  if (!fs.existsSync(STATE)) {
+    fs.mkdirSync(DATA, { recursive: true });
+    fs.copyFileSync(SEED, STATE);
   }
-  return domain.freshState();
+  return readJson(STATE);
 }
 
-function saveState() {
-  fs.mkdirSync(DATA, { recursive: true });
-  const tmp = `${STATE_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(state));
-  fs.renameSync(tmp, STATE_FILE);
+function writeState(data) {
+  const tmp = `${STATE}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data));
+  fs.renameSync(tmp, STATE);
 }
 
-async function fetchTabs() {
-  const response = await fetch(`https://docs.google.com/spreadsheets/d/${domain.SHEET_ID}/edit`, {
-    headers: { "User-Agent": "Mozilla/5.0" },
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!response.ok) throw new Error(`탭 목록 ${response.status}`);
-  return domain.parseTabList(await response.text());
+function publicState(state, actor) {
+  return publicLedger(state, actor, new Date());
 }
 
-async function fetchCsv(gid) {
-  const response = await fetch(
-    `https://docs.google.com/spreadsheets/d/${domain.SHEET_ID}/export?format=csv&gid=${gid}`,
-    { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(20000) },
-  );
-  if (!response.ok) throw new Error(`시트 ${response.status}`);
-  const text = await response.text();
-  if (!text || /<!DOCTYPE html/i.test(text.slice(0, 200))) throw new Error("시트를 읽지 못했습니다.");
-  return text;
-}
-
-async function syncSheet() {
-  try {
-    let tabs = state.sheet.tabs || [];
-    try {
-      const found = await fetchTabs();
-      if (found.length) tabs = found;
-    } catch (error) {
-      console.error("tabs", error.message);
-    }
-    const latest = domain.latestChecklist(tabs);
-    let gid = state.sheet.gid || latest?.gid || domain.FALLBACK_GID;
-    const changes = [];
-    if (state.settings.followLatest !== false && latest && state.sheet.gid && latest.gid !== state.sheet.gid) {
-      gid = latest.gid;
-      changes.push({
-        id: crypto.randomUUID(),
-        at: new Date().toISOString(),
-        gid,
-        tabName: latest.name,
-        kind: "new-tab",
-        key: "",
-        project: "",
-        assignee: "",
-        priority: "",
-        summary: `새 주간 시트가 열렸습니다. ${latest.name}`,
-        diffs: [],
-        acked: {},
-      });
-    } else if (!state.sheet.gid && latest) {
-      gid = latest.gid;
-    }
-    if (!/^\d{6,}$/.test(String(gid))) gid = domain.FALLBACK_GID;
-    const csv = await fetchCsv(gid);
-    const parsed = domain.parseSheet(csv);
-    const tabName = tabs.find((tab) => tab.gid === gid)?.name || state.sheet.tabName || "";
-    const meta = { gid, tabName, at: new Date().toISOString(), id: () => crypto.randomUUID() };
-    const diff = domain.diffRows(state.baselines[gid] || null, parsed.rows, meta);
-    if (diff.initial) {
-      changes.push({
-        id: crypto.randomUUID(),
-        at: meta.at,
-        gid,
-        tabName,
-        kind: "connected",
-        key: "",
-        project: "",
-        assignee: "",
-        priority: "",
-        summary: `${tabName || "주간 시트"}를 연결했습니다. 이제부터 추가와 수정을 알립니다.`,
-        diffs: [],
-        acked: {},
-      });
-    } else {
-      changes.push(...diff.changes);
-    }
-    state.baselines[gid] = parsed.rows;
-    state.baselineOrder = [gid, ...(state.baselineOrder || []).filter((item) => item !== gid)].slice(0, 6);
-    for (const key of Object.keys(state.baselines)) {
-      if (!state.baselineOrder.includes(key)) delete state.baselines[key];
-    }
-    state.changes = [...changes, ...(state.changes || [])].slice(0, 400);
-    state.sheet = {
-      gid,
-      tabName,
-      tabs,
-      fetchedAt: new Date().toISOString(),
-      error: "",
-      headers: parsed.headers,
-      rows: parsed.rows,
-    };
-  } catch (error) {
-    console.error("sync", error.message);
-    state.sheet.error = "시트를 지금 읽지 못했습니다. 마지막으로 받은 내용을 보여 줍니다.";
-  }
-  saveState();
+function keepServer(next, current) {
+  next.sheet = current.sheet || null;
+  next.sheetBaseline = current.sheetBaseline || null;
+  next.sheetRevision = current.sheetRevision || 0;
+  next.checks = current.checks || {};
+  next.todos = current.todos || [];
+  next.liveSettings = current.liveSettings || null;
+  return next;
 }
 
 function send(res, code, body, type = "application/json; charset=utf-8") {
-  res.writeHead(code, { "Content-Type": type, "Cache-Control": "no-store" });
+  res.writeHead(code, {
+    "Content-Type": type,
+    "Cache-Control": "no-store",
+  });
   res.end(body);
 }
 
@@ -170,123 +69,285 @@ function readBody(req) {
     let size = 0;
     req.on("data", (chunk) => {
       size += chunk.length;
-      if (size > 1_000_000) {
-        reject(Object.assign(new Error("요청이 너무 큽니다."), { status: 413 }));
+      if (size > 12_000_000) {
+        reject(new Error("요청이 너무 큽니다."));
         req.destroy();
-      } else {
-        chunks.push(chunk);
+        return;
       }
+      chunks.push(chunk);
     });
     req.on("end", () => {
       if (!chunks.length) return resolve({});
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch (error) {
-        reject(Object.assign(error, { status: 400 }));
+        reject(error);
       }
     });
     req.on("error", reject);
   });
 }
 
-function actorFrom(req) {
+function actorFrom(req, state) {
   const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
   const userId = sessions.get(token);
   if (!userId) return null;
   return state.users.find((user) => user.id === userId) || null;
 }
 
-function deskFor(user) {
-  return domain.buildDesk(state, user, new Date());
+function mergeUsers(current, incoming, actor) {
+  if (!Array.isArray(incoming)) return current;
+  const merged = [];
+  for (const item of incoming) {
+    if (!item || !item.id || merged.some((user) => user.id === item.id)) continue;
+    const prev = current.find((user) => user.id === item.id);
+    if (prev) {
+      merged.push({
+        ...prev,
+        name: item.name || prev.name,
+        title: item.title || prev.title,
+        dept: item.dept || prev.dept,
+        initials: item.initials || prev.initials,
+        role: item.id === actor.id ? "lead" : (item.role || prev.role),
+      });
+    } else if (item.password && /^[a-z0-9]{2,16}$/.test(item.id)) {
+      merged.push({
+        id: item.id,
+        password: String(item.password),
+        name: item.name || item.id,
+        title: item.title || "",
+        dept: item.dept || "",
+        initials: (item.initials || item.id.slice(0, 2)).toUpperCase(),
+        role: item.role || "designer",
+      });
+    }
+  }
+  for (const user of current) {
+    if (!merged.some((item) => item.id === user.id)) merged.push(user);
+  }
+  return merged;
 }
 
-async function handleApi(req, res, url) {
-  if (req.method === "GET" && url.pathname === "/api/health") {
-    send(res, 200, JSON.stringify({
-      ok: true,
-      sheet: state.sheet.tabName || "",
-      rows: (state.sheet.rows || []).length,
-      fetchedAt: state.sheet.fetchedAt || "",
-      error: state.sheet.error || "",
-    }));
-    return;
+function sanitize(current, incoming, actor) {
+  if ((incoming.sheetRevision || 0) !== (current.sheetRevision || 0)) {
+    const error = new Error("시트가 방금 갱신되었습니다. 최신 장부를 다시 엽니다.");
+    error.status = 409;
+    throw error;
   }
-  if (req.method === "POST" && url.pathname === "/api/login") {
-    const body = await readBody(req);
-    const found = state.users.find((user) => user.id === String(body.id || "").trim() && user.password === String(body.password || ""));
-    if (!found) {
-      send(res, 401, JSON.stringify({ error: "아이디 또는 비밀번호를 확인하세요." }));
-      return;
-    }
-    const token = crypto.randomBytes(24).toString("hex");
-    sessions.set(token, found.id);
-    send(res, 200, JSON.stringify({
-      token,
-      user: { id: found.id, name: found.name, title: found.title, initials: found.initials, role: found.role },
-    }));
-    return;
-  }
-  const user = actorFrom(req);
-  if (!user) {
-    send(res, 401, JSON.stringify({ error: "로그인이 필요합니다." }));
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/desk") {
-    send(res, 200, JSON.stringify(deskFor(user)));
-    return;
-  }
-  if (req.method === "POST" && url.pathname === "/api/act") {
-    const body = await readBody(req);
-    const result = await enqueue(async () => {
-      const outcome = domain.applyAction(state, user, body, new Date()) || {};
-      if (outcome.sync) await syncSheet();
-      else saveState();
-      return outcome;
-    });
-    send(res, 200, JSON.stringify({ desk: deskFor(user), deleted: result.deleted || null }));
-    return;
-  }
-  send(res, 404, JSON.stringify({ error: "없는 주소입니다." }));
-}
+  const next = {
+    meta: current.meta,
+    users: current.users,
+    departments: current.departments,
+    requesters: current.requesters,
+    workTypes: current.workTypes,
+    weeks: current.weeks,
+    tasks: current.tasks,
+    rituals: current.rituals || {},
+    settings: current.settings,
+    audit: Array.isArray(current.audit) ? current.audit : [],
+  };
 
-function serveFile(res, filePath) {
-  const ext = path.extname(filePath);
-  if (!TYPES[ext]) {
-    send(res, 404, "not found", "text/plain; charset=utf-8");
-    return;
+  if (actor.role === "executive") return current;
+
+  if (actor.role === "lead") {
+    next.weeks = Array.isArray(incoming.weeks) ? incoming.weeks : current.weeks;
+    next.tasks = Array.isArray(incoming.tasks) ? incoming.tasks : current.tasks;
+    next.rituals = incoming.rituals || {};
+    next.settings = incoming.settings || current.settings;
+    next.requesters = Array.isArray(incoming.requesters) ? incoming.requesters : current.requesters;
+    next.departments = Array.isArray(incoming.departments) ? incoming.departments : current.departments;
+    next.workTypes = Array.isArray(incoming.workTypes) ? incoming.workTypes : current.workTypes;
+    next.users = mergeUsers(current.users, incoming.users, actor);
+    next.audit = Array.isArray(incoming.audit) ? incoming.audit.slice(-400) : current.audit;
+    return keepServer(next, current);
   }
-  fs.readFile(filePath, (error, data) => {
-    if (error) {
-      send(res, 404, "not found", "text/plain; charset=utf-8");
-      return;
+
+  const previous = new Map(current.tasks.map((task) => [task.id, task]));
+  const incomingTasks = Array.isArray(incoming.tasks) ? incoming.tasks : current.tasks;
+  const kept = incomingTasks.map((task) => {
+    const prev = previous.get(task.id);
+    if (!prev) {
+      if (actor.role === "requester") {
+        return {
+          ...task,
+          assignee: "",
+          status: "시작전",
+          createdBy: actor.id,
+          snapshots: (task.snapshots || []).map((snap) => ({ ...snap, assignee: "", status: "시작전" })),
+        };
+      }
+      const assignee = task.assignee && task.assignee !== actor.initials ? actor.initials : (task.assignee || actor.initials);
+      return {
+        ...task,
+        assignee,
+        createdBy: actor.id,
+        snapshots: (task.snapshots || []).map((snap) => ({ ...snap, assignee })),
+      };
     }
-    send(res, 200, data, TYPES[ext]);
+    const owns = actor.role === "designer" && prev.assignee === actor.initials;
+    const ownRequest = actor.role === "requester" && prev.createdBy === actor.id && prev.status === "시작전";
+    if (ownRequest) {
+      return {
+        ...prev,
+        ...task,
+        id: prev.id,
+        createdBy: prev.createdBy,
+        status: "시작전",
+        assignee: "",
+        snapshots: (task.snapshots || prev.snapshots).map((snap) => ({ ...snap, status: "시작전", assignee: "" })),
+      };
+    }
+    if (owns) {
+      const merged = { ...prev, ...task, id: prev.id, assignee: prev.assignee, createdBy: prev.createdBy || actor.id };
+      merged.snapshots = (merged.snapshots || []).map((snap) => ({ ...snap, assignee: prev.assignee }));
+      return merged;
+    }
+    return prev;
   });
+  const seen = new Set(kept.map((task) => task.id));
+  for (const task of current.tasks) {
+    if (!seen.has(task.id)) kept.push(task);
+  }
+  next.tasks = kept;
+  if (Array.isArray(incoming.audit)) next.audit = incoming.audit.slice(-400);
+  return keepServer(next, current);
 }
+
+async function syncFromSheet() {
+  const state = ensureState();
+  try {
+    const page = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(20000),
+    });
+    const tabs = parseTabList(await page.text());
+    const latest = latestChecklist(tabs);
+    const gid = latest?.gid || state.sheet?.gid || FALLBACK_GID;
+    const csvResponse = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(20000),
+    });
+    const csv = await csvResponse.text();
+    if (!csvResponse.ok || /<!DOCTYPE html/i.test(csv.slice(0, 180))) throw new Error("시트를 읽지 못했습니다.");
+    const parsed = parseSheet(csv);
+    const tabName = tabs.find((tab) => tab.gid === gid)?.name || latest?.name || "";
+    ingestRows(state, parsed.rows, { gid, tabName, at: new Date().toISOString() });
+  } catch (error) {
+    state.sheet = state.sheet || { changes: [] };
+    state.sheet.error = "시트를 지금 읽지 못했습니다. 마지막 장부를 보여 줍니다.";
+    console.error("sheet", error.message);
+  }
+  writeState(state);
+}
+
+const TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+};
 
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
-  if (url.pathname.startsWith("/api/")) {
-    handleApi(req, res, url).catch((error) => {
-      const code = error.status || 500;
-      send(res, code, JSON.stringify({ error: error.message || "처리하지 못했습니다." }));
-    });
-    return;
-  }
-  const requested = url.pathname === "/" ? "/index.html" : url.pathname;
-  const filePath = path.normalize(path.join(PUBLIC, requested));
-  if (!filePath.startsWith(PUBLIC)) {
-    send(res, 403, "forbidden", "text/plain; charset=utf-8");
-    return;
-  }
-  serveFile(res, filePath);
+  const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+  enqueue(async () => {
+    try {
+      if (url.pathname === "/api/health" && req.method === "GET") {
+        return send(res, 200, JSON.stringify({ ok: true, name: "LUMEN" }));
+      }
+
+      if (url.pathname === "/api/login" && req.method === "POST") {
+        const body = await readBody(req);
+        const state = ensureState();
+        const user = state.users.find((item) => item.id === String(body.id || "").trim() && item.password === String(body.password || ""));
+        if (!user) return send(res, 401, JSON.stringify({ error: "아이디 또는 비밀번호를 확인하세요." }));
+        const token = crypto.randomBytes(24).toString("hex");
+        sessions.set(token, user.id);
+        const pub = { ...user };
+        delete pub.password;
+        return send(res, 200, JSON.stringify({ token, user: pub }));
+      }
+
+      if (url.pathname === "/api/password" && req.method === "POST") {
+        const state = ensureState();
+        const actor = actorFrom(req, state);
+        if (!actor) return send(res, 401, JSON.stringify({ error: "로그인이 필요합니다." }));
+        const body = await readBody(req);
+        if (actor.password !== String(body.current || "")) {
+          return send(res, 400, JSON.stringify({ error: "현재 비밀번호가 맞지 않습니다." }));
+        }
+        const nextPassword = String(body.next || "");
+        if (nextPassword.length < 6) return send(res, 400, JSON.stringify({ error: "새 비밀번호는 6자 이상으로 정하세요." }));
+        actor.password = nextPassword;
+        writeState(state);
+        return send(res, 200, JSON.stringify({ ok: true }));
+      }
+
+      if (url.pathname === "/api/reset" && req.method === "POST") {
+        const state = ensureState();
+        const actor = actorFrom(req, state);
+        if (!actor || actor.role !== "lead") return send(res, 403, JSON.stringify({ error: "팀장만 원장을 되돌릴 수 있습니다." }));
+        const seed = readJson(SEED);
+        writeState(seed);
+        return send(res, 200, JSON.stringify(publicState(seed, actor)));
+      }
+
+      if (url.pathname === "/api/state" && req.method === "GET") {
+        const state = ensureState();
+        const actor = actorFrom(req, state);
+        if (!actor) return send(res, 401, JSON.stringify({ error: "로그인이 필요합니다." }));
+        return send(res, 200, JSON.stringify(publicState(state, actor)));
+      }
+
+      if (url.pathname === "/api/state" && req.method === "PUT") {
+        const state = ensureState();
+        const actor = actorFrom(req, state);
+        if (!actor) return send(res, 401, JSON.stringify({ error: "로그인이 필요합니다." }));
+        const body = await readBody(req);
+        delete body.sessionUser;
+        const next = sanitize(state, body, actor);
+        writeState(next);
+        return send(res, 200, JSON.stringify(publicState(next, actor)));
+      }
+
+      if (url.pathname === "/api/live" && req.method === "POST") {
+        const state = ensureState();
+        const actor = actorFrom(req, state);
+        if (!actor) return send(res, 401, JSON.stringify({ error: "로그인이 필요합니다." }));
+        const body = await readBody(req);
+        const outcome = applyLive(state, actor, body, new Date()) || {};
+        writeState(state);
+        const payload = publicState(state, actor);
+        payload.deleted = outcome.deleted || null;
+        return send(res, 200, JSON.stringify(payload));
+      }
+
+      let pathname = decodeURIComponent(url.pathname);
+      if (pathname === "/") pathname = "/index.html";
+      const file = path.normalize(path.join(PUBLIC, pathname));
+      if (!file.startsWith(PUBLIC)) return send(res, 403, "forbidden", "text/plain; charset=utf-8");
+      if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+        return send(res, 404, "not found", "text/plain; charset=utf-8");
+      }
+      const ext = path.extname(file);
+      res.writeHead(200, {
+        "Content-Type": TYPES[ext] || "application/octet-stream",
+        "Cache-Control": "no-store",
+      });
+      fs.createReadStream(file).pipe(res);
+    } catch (error) {
+      if (!res.headersSent) send(res, error.status || 500, JSON.stringify({ error: error.status ? error.message : "요청을 처리하지 못했습니다." }));
+    }
+  }).catch(() => {
+    if (!res.headersSent) send(res, 500, JSON.stringify({ error: "요청을 처리하지 못했습니다." }));
+  });
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`LUMEN desk http://127.0.0.1:${PORT}`);
+  ensureState();
+  console.log(`LUMEN ready`);
+  console.log(`  local   http://127.0.0.1:${PORT}`);
+  console.log(`  network http://0.0.0.0:${PORT}`);
+  enqueue(() => syncFromSheet());
+  setInterval(() => enqueue(() => syncFromSheet()), Number(process.env.POLL_MS || 45000));
 });
-
-enqueue(() => syncSheet());
-setInterval(() => {
-  enqueue(() => syncSheet());
-}, POLL_MS);

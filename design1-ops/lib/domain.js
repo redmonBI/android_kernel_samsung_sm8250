@@ -976,7 +976,7 @@ export function applyAction(state, user, body, now = new Date()) {
   throw error;
 }
 
-function applyTodo(state, user, body, now) {
+export function applyTodo(state, user, body, now) {
   const mine = () => state.todos.find((todo) => todo.id === body.id && todo.userId === user.id);
   if (body.action === "create") {
     const title = String(body.title || "").trim();
