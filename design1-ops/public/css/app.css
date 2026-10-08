@@ -141,6 +141,7 @@ textarea { min-height: 72px; resize: vertical; }
   padding: 8px 14px;
   background: #fff;
   border: 1px solid #ddd2c5;
+  white-space: nowrap;
 }
 .btn.primary { background: var(--ink); color: #fffaf4; border-color: var(--ink); }
 .btn.quiet { background: transparent; }
@@ -247,5 +248,9 @@ textarea { min-height: 72px; resize: vertical; }
   .login, .shell, .split, .people, .columns, .composer, .settings { grid-template-columns: 1fr; }
   .nav { height: auto; position: relative; }
   .shell { grid-template-columns: 1fr; }
+  .chrome { flex-wrap: wrap; }
+  .chrome .search, #week { flex: 1 1 180px; max-width: none; }
+  .login-story { padding: 28px 20px; }
   .login-story .word { font-size: 56px; }
+  .stage { padding: 8px 12px 32px; }
 }

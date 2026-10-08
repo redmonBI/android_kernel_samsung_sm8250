@@ -77,9 +77,9 @@ function logout() {
 }
 
 async function refresh() {
-  const prev = desk?.counts?.changes ?? 0;
+  const prev = desk ? desk.counts.changes : null;
   desk = await api("/api/desk");
-  if (desk.counts.changes > prev) toast("시트에 새 변경이 있습니다.");
+  if (prev != null && desk.counts.changes > prev) toast("시트에 새 변경이 있습니다.");
   if (ui.focus) {
     const alive = ui.focus.source === "sheet"
       ? desk.tasks.some((task) => task.key === ui.focus.ref)
@@ -253,12 +253,13 @@ document.body.addEventListener("submit", async (event) => {
   if (!(form instanceof HTMLFormElement)) return;
   event.preventDefault();
   const data = new FormData(form);
+  const formId = form.getAttribute("id");
   try {
-    if (form.id === "login-form") {
+    if (formId === "login-form") {
       await login(String(data.get("id") || ""), String(data.get("password") || ""));
       return;
     }
-    if (form.id === "todo-form") {
+    if (formId === "todo-form") {
       await act({
         type: "todo",
         action: "create",
@@ -272,7 +273,7 @@ document.body.addEventListener("submit", async (event) => {
       toast("할 일을 등록했습니다.");
       return;
     }
-    if (form.id === "reschedule-form") {
+    if (formId === "reschedule-form") {
       const payload = {
         date: data.get("date"),
         time: data.get("time"),
@@ -288,7 +289,7 @@ document.body.addEventListener("submit", async (event) => {
       toast("일정을 바꿨습니다. 시트에도 같은 날짜를 적어 주세요.");
       return;
     }
-    if (form.id === "settings-form") {
+    if (formId === "settings-form") {
       await act({
         type: "settings",
         dayLeadHours: Number(data.get("dayLeadHours")),
@@ -300,7 +301,7 @@ document.body.addEventListener("submit", async (event) => {
       toast("기준을 저장했습니다.");
     }
   } catch (error) {
-    if (form.id === "login-form") {
+    if (formId === "login-form") {
       ui.loginError = error.message;
       render();
     } else {
