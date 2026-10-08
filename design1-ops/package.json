@@ -1,0 +1,10 @@
+{
+  "name": "lumen",
+  "private": true,
+  "type": "module",
+  "description": "디자인1팀 주간 운영 장부",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/domain.test.js test/ledger-sync.test.js"
+  }
+}
