@@ -1,6 +1,8 @@
 import { CLOSED, PHASES, present, validateDraft } from "./metrics.js";
 import { addDays, downloadText, formatDot, mondayOnOrAfter, roleLabel, todayISO, uid } from "./util.js";
 import { layoutOf, renderLogin, renderShell } from "./view.js";
+import { FALLBACK_GID, SHEET_ID, latestChecklist, parseMatrix, parseTabList } from "./vendor/domain.js";
+import { applyLive, buildLive, ingestRows } from "./vendor/ledger-sync.js";
 
 const app = document.querySelector("#app");
 const VIEWS = ["today", "inbox", "cycle", "projects", "calendar", "load", "report", "review", "org", "plugins", "new", "work", "live", "todos"];
@@ -54,7 +56,10 @@ function stripUser(account) {
 }
 
 function withSession(data, actor) {
-  return { ...data, users: (data.users || []).map(stripUser), sessionUser: stripUser(actor) };
+  const sessionUser = stripUser(actor);
+  const view = { ...data, users: (data.users || []).map(stripUser), sessionUser };
+  if (sessionUser) view.live = buildLive(data, actor, new Date());
+  return view;
 }
 
 function weekById(id) {
@@ -116,6 +121,14 @@ async function staticApi(path, options = {}) {
     ledger = await loadSeed();
     persistLedger();
     return withSession(ledger, ledger.users.find((item) => item.id === user.id));
+  }
+  if (path.endsWith("/live") && options.method === "POST") {
+    const actor = ledger.users.find((item) => item.id === user.id) || user;
+    const outcome = applyLive(ledger, actor, body, new Date()) || {};
+    persistLedger();
+    const data = withSession(ledger, actor);
+    data.deleted = outcome.deleted || null;
+    return data;
   }
   if (path.endsWith("/state") && options.method === "PUT") {
     const incoming = JSON.parse(options.body);
@@ -922,6 +935,53 @@ document.addEventListener("drop", async (event) => {
 
 window.addEventListener("hashchange", onHash);
 
+function gvizMatrix(table) {
+  const width = table.cols.length;
+  return (table.rows || []).map((row) => Array.from({ length: width }, (_, index) => {
+    const cell = (row.c || [])[index];
+    if (!cell) return "";
+    if (cell.f != null && cell.f !== "") return String(cell.f);
+    if (cell.v == null) return "";
+    return String(cell.v);
+  }));
+}
+
+let sheetPull = null;
+
+async function pullSheet() {
+  if (mode !== "static" || !ledger || sheetPull) return sheetPull;
+  sheetPull = (async () => {
+    const html = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`, { cache: "no-store" }).then((response) => {
+      if (!response.ok) throw new Error("시트 탭을 읽지 못했습니다.");
+      return response.text();
+    });
+    const tabs = parseTabList(html);
+    const latest = latestChecklist(tabs);
+    const gid = latest?.gid || FALLBACK_GID;
+    const script = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&gid=${gid}`, { cache: "no-store" }).then((response) => response.text());
+    const payload = JSON.parse(script.slice(script.indexOf("{"), script.lastIndexOf("}") + 1));
+    if (payload.status && payload.status !== "ok") throw new Error("시트 응답이 올바르지 않습니다.");
+    const parsed = parseMatrix(gvizMatrix(payload.table));
+    ingestRows(ledger, parsed.rows, { gid, tabName: latest?.name || "", at: new Date().toISOString() });
+    persistLedger();
+    const actor = user && ledger.users.find((item) => item.id === user.id);
+    if (!actor) return;
+    if (ui.focus || ui.panel || state?.live?.blocking?.length) {
+      state.live = buildLive(ledger, actor, new Date());
+      return;
+    }
+    adoptState(withSession(ledger, actor));
+    render();
+  })().catch((error) => {
+    ledger.sheet = ledger.sheet || { changes: [] };
+    ledger.sheet.error = "구글 시트를 지금 읽지 못했습니다. 이 브라우저에 저장된 장부를 보여 줍니다.";
+    console.error(error);
+  }).finally(() => {
+    sheetPull = null;
+  });
+  return sheetPull;
+}
+
 async function boot() {
   try { ui.personalLayout = JSON.parse(localStorage.getItem("lumen-personal-layout") || "null"); } catch { ui.personalLayout = null; }
   let serverUp = false;
@@ -948,11 +1008,15 @@ async function boot() {
         user = stripUser(found);
         adoptState(withSession(ledger, found));
         onHash();
+        pullSheet().catch(() => {});
+        setInterval(() => pullSheet().catch(() => {}), 60000);
         return;
       }
     }
     token = "";
     render();
+    pullSheet().catch(() => {});
+    setInterval(() => pullSheet().catch(() => {}), 60000);
     return;
   }
   mode = "server";

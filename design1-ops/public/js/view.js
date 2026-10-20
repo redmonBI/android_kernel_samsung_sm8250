@@ -73,8 +73,8 @@ export function renderLogin(ctx) {
   const healthClass = ctx.health === "ok" || ctx.health === "static" ? "ok" : ctx.health === "down" ? "down" : "";
   const healthText = ctx.health === "ok"
     ? "서버에 연결되었습니다. 이 주소로 팀 장부를 같이 봅니다."
-    : ctx.health === "static"
-      ? "웹으로 열려 있습니다. 어디서든 접속되고, 수정은 이 브라우저에 저장됩니다."
+      : ctx.health === "static"
+      ? "무료 웹 주소로 열려 있습니다. 구글 시트를 직접 읽고, 체크와 할 일은 이 브라우저에 저장됩니다."
       : ctx.health === "down"
         ? "장부를 열지 못했습니다. 주소를 다시 확인하세요."
         : "연결을 확인하고 있습니다.";
