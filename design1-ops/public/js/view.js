@@ -331,37 +331,68 @@ function renderLive(ctx) {
 
 function renderTodos(ctx) {
   const live = ctx.state.live;
-  const todos = live?.todos || { today: [], week: [], next: [], later: [], done: [] };
+  const todos = live?.todos || { doing: [], today: [], week: [], next: [], later: [], reuse: [], done: [] };
+  const filter = ctx.ui.todoFilter || "all";
+  const show = (name) => filter === "all" || filter === name;
   const column = (title, items) => `<section class="panel"><h2>${title} ${items.length}</h2>${items.length ? items.map(todoCard).join("") : `<div class="empty">비어 있습니다.</div>`}</section>`;
-  return `${head("할 일", "시트 밖의 내 일", "오늘, 이번 주, 다음 주로 옮깁니다. 중요로 표시하면 팝업에서 완료·재확인·일정 변경 중 하나를 골라야 합니다.")}
+  const scheduled = [...(todos.today || []), ...(todos.week || []), ...(todos.next || []), ...(todos.later || []), ...(todos.reuse || [])];
+  return `${head("할 일", "시트 밖의 내 일", "시작일만, 종료일만, 또는 날짜 없이 1시간·2시간 타이머로 등록합니다. 수시·반복 업무는 이번에만 닫거나 같은 설정으로 다시 씁니다.")}
+    <div class="choice" style="margin-bottom:12px">
+      ${[["all", "전체"], ["doing", "진행중"], ["scheduled", "예정"], ["done", "종료"]].map(([id, label]) => `<button class="btn ${filter === id ? "primary" : ""}" type="button" data-act="todo-filter" data-filter="${id}">${label}</button>`).join("")}
+    </div>
     <form id="todo-form" class="panel" style="display:grid;gap:8px">
       <label>할 일<input id="todo-title" name="title" required placeholder="예: 견적 회신"></label>
       <label>메모<input name="note"></label>
       <div class="filters" style="display:flex;gap:8px;flex-wrap:wrap">
-        <label>날짜<input name="dueDate" type="date"></label>
-        <label>시간<input name="dueTime" type="time"></label>
+        <label>종류<select name="kind"><option value="once">한 번</option><option value="spot">수시 체크</option><option value="repeat">반복 체크</option></select></label>
+        <label>시작일<input name="startDate" type="date"></label>
+        <label>종료일<input name="dueDate" type="date"></label>
+        <label>시각<input name="dueTime" type="time"></label>
+        <label>타이머<select name="timer"><option value="">없음</option><option value="60">1시간 뒤</option><option value="120">2시간 뒤</option><option value="180">3시간 뒤</option><option value="custom">직접</option></select></label>
+        <label>직접(분)<input name="timerMinutes" type="number" min="5" max="1440" placeholder="분"></label>
         <label>위치<select name="bucket"><option value="today">오늘</option><option value="week">이번 주</option><option value="next">다음 주</option><option value="later">나중</option></select></label>
         <label><input name="important" type="checkbox">중요 팝업</label>
       </div>
       <button class="btn primary" type="submit">등록</button>
     </form>
-    <div class="home-grid">
-      ${column("오늘", todos.today)}${column("이번 주", todos.week)}${column("다음 주", todos.next)}${column("나중", todos.later)}
-    </div>
-    ${todos.done?.length ? `<section class="panel"><h2>최근 완료</h2>${todos.done.map((todo) => `<div class="live-row"><strong>${esc(todo.title)}</strong><button class="btn tiny" type="button" data-act="todo-status" data-id="${esc(todo.id)}" data-status="open">다시 열기</button></div>`).join("")}</section>` : ""}`;
+    ${todoReport(live?.todoReport || [])}
+    ${show("doing") ? column("진행중", todos.doing || []) : ""}
+    ${show("scheduled") ? `<div class="todo-board">
+      ${column("오늘", todos.today || [])}
+      ${column("이번 주", todos.week || [])}
+      ${column("다음 주", todos.next || [])}
+      ${column("나중", todos.later || [])}
+      ${column("재사용 대기", todos.reuse || [])}
+    </div>` : ""}
+    ${show("done") ? `<section class="panel"><h2>종료 ${todos.done?.length || 0}</h2>${todos.done?.length ? todos.done.map(todoCard).join("") : `<div class="empty">종료된 할 일이 없습니다.</div>`}</section>` : ""}
+    ${filter === "all" ? "" : `<p class="muted">예정 ${scheduled.length}건 · 진행중 ${(todos.doing || []).length}건 · 종료 ${(todos.done || []).length}건</p>`}`;
+}
+
+function todoReport(rows) {
+  if (!rows.length) return "";
+  const kindName = { spot: "수시", repeat: "반복" };
+  const headCell = ["업무", "종류", "누적 회차", "이번 주", "이번 달", "분기", "반기", "올해"];
+  return `<section class="panel"><h2>수시·반복 누적</h2>
+    <div class="todo-table-wrap"><table class="todo-stats"><thead><tr>${headCell.map((cell) => `<th>${cell}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map((row) => `<tr><td>${esc(row.title)}</td><td>${esc(kindName[row.kind] || row.kind)}</td><td>${row.total}</td><td>${row.week}</td><td>${row.month}</td><td>${row.quarter}</td><td>${row.half}</td><td>${row.year}</td></tr>`).join("")}</tbody></table></div>
+    <p class="muted">이번에 종료하거나 완전 종료할 때마다 회차가 쌓입니다. 표는 그 회차가 속한 주, 월, 분기, 반기, 해를 센 값입니다.</p>
+  </section>`;
 }
 
 function todoCard(todo) {
+  const kindName = { once: "한 번", spot: "수시", repeat: "반복" };
+  const statusName = { open: "예정", doing: "진행중", paused: "재사용 대기", done: "종료" };
+  const rounds = (todo.rounds || []).length;
   return `<article class="panel" style="margin-top:8px${todo.important ? ";box-shadow:inset 3px 0 0 var(--danger)" : ""}">
     <strong>${esc(todo.title)}</strong>
-    <div class="muted">${esc(todo.dueLabel || "")}${todo.reminderLabel ? ` · ${esc(todo.reminderLabel)}` : ""}${todo.note ? ` · ${esc(todo.note)}` : ""}</div>
+    <div class="muted">${esc(kindName[todo.kind] || "한 번")} · ${esc(statusName[todo.status] || todo.status)}${rounds ? ` · ${rounds}회차` : ""}${todo.dueLabel ? ` · ${esc(todo.dueLabel)}` : ""}${todo.reminderLabel ? ` · ${esc(todo.reminderLabel)}` : ""}${todo.note ? ` · ${esc(todo.note)}` : ""}</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
-      <button class="btn tiny" type="button" data-act="todo-status" data-id="${esc(todo.id)}" data-status="done">완료</button>
-      <button class="btn tiny" type="button" data-act="todo-status" data-id="${esc(todo.id)}" data-status="${todo.status === "doing" ? "open" : "doing"}">${todo.status === "doing" ? "대기" : "진행중"}</button>
-      <button class="btn tiny" type="button" data-act="focus-live" data-source="todo" data-ref="${esc(todo.id)}">체크</button>
-      <button class="btn tiny" type="button" data-act="todo-move" data-id="${esc(todo.id)}" data-bucket="today">오늘</button>
-      <button class="btn tiny" type="button" data-act="todo-move" data-id="${esc(todo.id)}" data-bucket="week">이번 주</button>
-      <button class="btn tiny" type="button" data-act="todo-move" data-id="${esc(todo.id)}" data-bucket="next">다음 주</button>
+      ${todo.status === "doing" ? "" : `<button class="btn tiny" type="button" data-act="todo-status" data-id="${esc(todo.id)}" data-status="doing">진행중</button>`}
+      ${todo.closed ? "" : `<button class="btn tiny" type="button" data-act="todo-round" data-id="${esc(todo.id)}">이번에 종료</button>`}
+      ${todo.closed ? "" : `<button class="btn tiny" type="button" data-act="todo-close" data-id="${esc(todo.id)}">완전 종료</button>`}
+      ${todo.closed ? "" : `<button class="btn tiny" type="button" data-act="todo-move" data-id="${esc(todo.id)}" data-bucket="next">다음 주</button>`}
+      <button class="btn tiny" type="button" data-act="todo-reuse" data-id="${esc(todo.id)}">다음번 그대로</button>
+      ${todo.closed ? "" : `<button class="btn tiny" type="button" data-act="focus-live" data-source="todo" data-ref="${esc(todo.id)}">체크</button>`}
       <button class="btn tiny" type="button" data-act="todo-flag" data-id="${esc(todo.id)}" data-important="${todo.important ? "0" : "1"}">${todo.important ? "중요 해제" : "중요"}</button>
       <button class="btn tiny" type="button" data-act="todo-delete" data-id="${esc(todo.id)}">삭제</button>
     </div>
@@ -384,7 +415,7 @@ function liveDialog(ctx) {
       voluntary = !forced;
     }
   } else if (ctx.ui.focus?.source === "todo") {
-    const todos = ["today", "week", "next", "later", "done"].flatMap((key) => live.todos?.[key] || []);
+    const todos = ["doing", "today", "week", "next", "later", "reuse", "done"].flatMap((key) => live.todos?.[key] || []);
     const todo = todos.find((entry) => entry.id === ctx.ui.focus.ref);
     const forced = live.blocking.find((entry) => entry.source === "todo" && entry.ref === ctx.ui.focus.ref);
     if (todo) {
@@ -401,7 +432,14 @@ function liveDialog(ctx) {
     <div class="kicker">${esc(item.label || "확인")} · ${live.blocking.length || 1}건</div>
     <h2>${esc(item.title)}</h2>
     ${(item.lines || []).map((line) => `<p>${esc(line)}</p>`).join("")}
-    ${isChange ? `<div class="choice"><button class="btn primary" type="button" data-act="live-ack" data-id="${esc(item.ref)}">확인했습니다</button></div>` : `<div class="choice">
+    ${isChange ? `<div class="choice"><button class="btn primary" type="button" data-act="live-ack" data-id="${esc(item.ref)}">확인했습니다</button></div>` : item.source === "todo" ? `<div class="choice">
+      <button class="btn" type="button" data-act="todo-round" data-id="${esc(item.ref)}">이번에 종료</button>
+      <button class="btn primary" type="button" data-act="todo-close" data-id="${esc(item.ref)}">완전 종료</button>
+      <button class="btn" type="button" data-act="todo-reuse" data-id="${esc(item.ref)}">다음번 그대로</button>
+      <button class="btn" type="button" data-act="todo-move" data-id="${esc(item.ref)}" data-bucket="next">다음 주</button>
+      <button class="btn" type="button" data-act="live-snooze" data-source="todo" data-ref="${esc(item.ref)}" data-mode="1h">1시간 뒤 재확인</button>
+      ${voluntary ? `<button class="btn quiet" type="button" data-act="close-focus">닫기</button>` : ""}
+    </div>` : `<div class="choice">
       <button class="btn primary" type="button" data-act="live-done" data-source="${esc(item.source)}" data-ref="${esc(item.ref)}">완료</button>
       <button class="btn" type="button" data-act="live-snooze" data-source="${esc(item.source)}" data-ref="${esc(item.ref)}" data-mode="1h">1시간 뒤 재확인</button>
       <button class="btn" type="button" data-act="live-snooze" data-source="${esc(item.source)}" data-ref="${esc(item.ref)}" data-mode="tomorrow">내일 아침 재확인</button>

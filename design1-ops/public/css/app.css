@@ -33,6 +33,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 h1, h2, h3, p { margin: 0; }
 .live-row { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--line); }
+.todo-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; align-items: start; }
+.todo-table-wrap { overflow-x: auto; }
+.todo-stats { width: 100%; border-collapse: collapse; font-size: 13px; }
+.todo-stats th, .todo-stats td { border-bottom: 1px solid var(--line); padding: 8px 6px; text-align: left; white-space: nowrap; }
+.todo-stats th { color: var(--muted); font-weight: 600; }
 .banner { padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); margin-bottom: 12px; }
 .banner.bad { background: #f8e4e1; }
 .scrim { position: fixed; inset: 0; z-index: 30; background: rgba(19, 18, 17, 0.62); display: grid; place-items: center; padding: 24px; }

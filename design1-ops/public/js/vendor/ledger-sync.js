@@ -6,8 +6,10 @@ import {
   dueLabel,
   isClosedStatus,
   parseDue,
+  presentTodo,
   randomId,
   snoozeInstant,
+  summarizeTodoRounds,
 } from "./domain.js";
 
 const CLOSED = new Set(["완료", "완료(추가)", "취소"]);
@@ -352,19 +354,20 @@ export function buildLive(state, user, now = new Date()) {
   }
   const myTodos = (state.todos || [])
     .filter((todo) => todo.userId === user.id)
-    .map((todo) => presentTodoSafe(todo, settings, now));
+    .map((todo) => presentTodo(todo, settings, now));
   for (const todo of myTodos) {
-    if (todo.closed) continue;
+    if (todo.closed || todo.paused) continue;
     if (todo.quietUntil && new Date(todo.quietUntil).getTime() > now.getTime()) continue;
     const hour = todo.reminderKind === "hour";
     const important = todo.important && !todo.importantAcked;
-    if (!hour && !important) continue;
+    const fired = todo.timer && todo.reminderKind === "overdue";
+    if (!hour && !important && !fired) continue;
     blocking.push({
-      id: `todo:${todo.id}:${hour ? "hour" : "important"}`,
+      id: `todo:${todo.id}:${fired ? "timer" : hour ? "hour" : "important"}`,
       source: "todo",
       ref: todo.id,
-      kind: hour ? "hour" : "important",
-      label: hour ? "한 시간 전" : "중요 확인",
+      kind: fired ? "hour" : hour ? "hour" : "important",
+      label: fired ? "타이머" : hour ? "한 시간 전" : "중요 확인",
       title: todo.title,
       priority: todo.important ? "중요" : "",
       lines: [todo.note, todo.dueLabel].filter(Boolean),
@@ -438,23 +441,7 @@ export function buildLive(state, user, now = new Date()) {
       todos: myTodos.filter((todo) => !todo.closed).length,
     },
     todos: groupTodos(myTodos, now),
-  };
-}
-
-function presentTodoSafe(todo, settings, now) {
-  const due = todo.dueDate ? parseDue(todo.dueTime ? `${todo.dueDate} ${todo.dueTime}` : todo.dueDate, settings.dateOnlyTime) : null;
-  if (due && !todo.dueTime) due.assumedTime = true;
-  const closed = todo.status === "done";
-  const snoozed = todo.snoozeUntil && new Date(todo.snoozeUntil).getTime() > now.getTime();
-  const reminder = closed || snoozed ? null : classifyReminder(due, now, settings);
-  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
-  return {
-    ...todo,
-    closed,
-    dueLabel: due ? dueLabel(due) : (todo.bucket === "today" ? "오늘" : "날짜 없음"),
-    reminderKind: reminder?.kind || "",
-    reminderLabel: reminderMeta(reminder?.kind, due, now).label,
-    pulledToday: !closed && (todo.bucket === "today" || (todo.dueDate && todo.dueDate <= today)),
+    todoReport: summarizeTodoRounds((state.todos || []).filter((todo) => todo.userId === user.id), now),
   };
 }
 
@@ -464,18 +451,25 @@ function groupTodos(todos, now) {
   const sunday = shiftDate(monday, 6);
   const nextMonday = shiftDate(monday, 7);
   const nextSunday = shiftDate(monday, 13);
-  const grouped = { today: [], week: [], next: [], later: [], done: [] };
+  const grouped = { doing: [], today: [], week: [], next: [], later: [], reuse: [], done: [] };
   for (const todo of todos) {
     if (todo.closed) {
       grouped.done.push(todo);
       continue;
     }
+    if (todo.paused) {
+      grouped.reuse.push(todo);
+      continue;
+    }
+    if (todo.doing) {
+      grouped.doing.push(todo);
+      continue;
+    }
     if (todo.pulledToday) grouped.today.push(todo);
-    else if (todo.bucket === "week" || (todo.dueDate >= monday && todo.dueDate <= sunday)) grouped.week.push(todo);
-    else if (todo.bucket === "next" || (todo.dueDate >= nextMonday && todo.dueDate <= nextSunday)) grouped.next.push(todo);
+    else if (todo.bucket === "week" || (todo.dueDate && todo.dueDate >= monday && todo.dueDate <= sunday)) grouped.week.push(todo);
+    else if (todo.bucket === "next" || (todo.dueDate && todo.dueDate >= nextMonday && todo.dueDate <= nextSunday)) grouped.next.push(todo);
     else grouped.later.push(todo);
   }
-  grouped.done = grouped.done.slice(0, 12);
   return grouped;
 }
 

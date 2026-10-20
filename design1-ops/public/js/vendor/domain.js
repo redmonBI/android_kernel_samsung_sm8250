@@ -636,26 +636,103 @@ function todoDue(todo, settings) {
   return parsed;
 }
 
+function timerDue(todo) {
+  if (!todo.timerUntil) return null;
+  const instant = new Date(todo.timerUntil);
+  if (Number.isNaN(instant.getTime())) return null;
+  const parts = seoulParts(instant);
+  return {
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour: parts.hour,
+    minute: parts.minute,
+    hasTime: true,
+    assumedTime: false,
+    instant,
+    iso: instant.toISOString(),
+  };
+}
+
+function spanLabel(todo, due) {
+  const start = todo.startDate ? formatDay(todo.startDate) : "";
+  const end = todo.dueDate ? `${formatDay(todo.dueDate)}${todo.dueTime ? ` ${todo.dueTime}` : ""}` : "";
+  if (todo.timerMinutes && due) return `타이머 ${todo.timerMinutes}분 · ${dueLabel(due)}`;
+  if (start && end) return `${start} 시작 · ${end} 종료`;
+  if (end) return `${end} 종료`;
+  if (start) return `${start} 시작 · 종료일 없음`;
+  if (due) return dueLabel(due);
+  if (todo.bucket === "today") return "오늘";
+  return "날짜 없음";
+}
+
 export function presentTodo(todo, settings, now) {
   const range = weekRange(now);
-  const due = todoDue(todo, settings);
   const closed = todo.status === "done";
+  const paused = todo.status === "paused";
+  const doing = todo.status === "doing";
+  const timer = !closed && !paused && !!todo.timerUntil;
+  const due = timer ? timerDue(todo) : todoDue(todo, settings);
   const snoozed = todo.snoozeUntil && new Date(todo.snoozeUntil).getTime() > now.getTime();
-  const reminder = closed || snoozed ? null : classifyReminder(due, now, settings);
+  const reminderSettings = timer ? { dayLeadHours: 0, hourLeadMinutes: 0 } : settings;
+  const reminder = closed || paused || snoozed ? null : classifyReminder(due, now, reminderSettings);
   const meta = reminderMeta(reminder?.kind, due, now);
-  const pulledToday = !closed && (todo.bucket === "today" || (todo.dueDate && todo.dueDate <= range.today));
+  const started = !todo.startDate || todo.startDate <= range.today;
+  const pulledToday = !closed && !paused && !doing && started && (
+    timer || todo.bucket === "today" || (todo.dueDate && todo.dueDate <= range.today)
+  );
   return {
     ...todo,
     closed,
-    dueLabel: due ? dueLabel(due) : (todo.bucket === "today" ? "오늘" : "날짜 없음"),
-    assumedTime: !!due?.assumedTime && !todo.dueTime,
+    paused,
+    doing,
+    timer,
+    kind: todo.kind || "once",
+    rounds: todo.rounds || [],
+    dueLabel: spanLabel(todo, due),
+    assumedTime: !!due?.assumedTime && !todo.dueTime && !timer,
     dueIso: due?.iso || "",
     reminderKind: reminder?.kind || "",
-    reminderLabel: meta.label,
+    reminderLabel: timer && reminder ? "타이머" : meta.label,
     pulledToday,
     quietUntil: todo.quietUntil || "",
     snoozeLabel: todo.snoozeUntil ? formatWhen(new Date(todo.snoozeUntil)) : "",
   };
+}
+
+export function summarizeTodoRounds(todos, now = new Date()) {
+  const range = weekRange(now);
+  const parts = seoulParts(now);
+  const year = parts.year;
+  const month = parts.month;
+  const quarterStart = Math.floor((month - 1) / 3) * 3 + 1;
+  const halfStart = month <= 6 ? 1 : 7;
+  const monthEnd = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+  const quarterEnd = new Date(Date.UTC(year, quarterStart + 2, 0)).toISOString().slice(0, 10);
+  const halfEnd = new Date(Date.UTC(year, halfStart + 5, 0)).toISOString().slice(0, 10);
+  const bounds = {
+    week: [range.monday, range.sunday],
+    month: [`${year}-${String(month).padStart(2, "0")}-01`, monthEnd],
+    quarter: [`${year}-${String(quarterStart).padStart(2, "0")}-01`, quarterEnd],
+    half: [`${year}-${String(halfStart).padStart(2, "0")}-01`, halfEnd],
+    year: [`${year}-01-01`, `${year}-12-31`],
+  };
+  const within = (day, [start, end]) => day >= start && day <= end;
+  return (todos || []).filter((todo) => todo.kind === "spot" || todo.kind === "repeat").map((todo) => {
+    const days = (todo.rounds || []).map((round) => round.day || String(round.at || "").slice(0, 10)).filter(Boolean);
+    return {
+      id: todo.id,
+      title: todo.title,
+      kind: todo.kind,
+      status: todo.status,
+      total: days.length,
+      week: days.filter((day) => within(day, bounds.week)).length,
+      month: days.filter((day) => within(day, bounds.month)).length,
+      quarter: days.filter((day) => within(day, bounds.quarter)).length,
+      half: days.filter((day) => within(day, bounds.half)).length,
+      year: days.filter((day) => within(day, bounds.year)).length,
+    };
+  });
 }
 
 function blockRank(item) {
@@ -997,28 +1074,43 @@ export function applyTodo(state, user, body, now) {
       error.status = 400;
       throw error;
     }
+    const startDate = /^\d{4}-\d{2}-\d{2}$/.test(body.startDate || "") ? body.startDate : "";
     const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(body.dueDate || "") ? body.dueDate : "";
+    if (startDate && dueDate && dueDate < startDate) {
+      const error = new Error("종료일은 시작일보다 빠를 수 없습니다.");
+      error.status = 400;
+      throw error;
+    }
     const dueTime = /^\d{2}:\d{2}$/.test(body.dueTime || "") ? body.dueTime : "";
     const bucket = ["today", "week", "next", "later"].includes(body.bucket) ? body.bucket : "today";
+    const kind = ["once", "spot", "repeat"].includes(body.kind) ? body.kind : "once";
+    let timerMinutes = 0;
+    if (String(body.timer || "") === "custom") timerMinutes = Number(body.timerMinutes) || 0;
+    else if (/^\d+$/.test(String(body.timer || ""))) timerMinutes = Number(body.timer);
+    else if (body.timerMinutes) timerMinutes = Number(body.timerMinutes) || 0;
+    if (!Number.isFinite(timerMinutes) || timerMinutes < 0) timerMinutes = 0;
+    timerMinutes = Math.min(24 * 60, Math.round(timerMinutes));
     const todo = {
       id: randomId(),
       userId: user.id,
       title: title.slice(0, 200),
       note: String(body.note || "").slice(0, 2000),
+      kind,
+      startDate,
       dueDate,
       dueTime,
+      timerMinutes,
+      timerUntil: timerMinutes ? new Date(now.getTime() + timerMinutes * 60000).toISOString() : "",
       bucket,
       status: "open",
       important: !!body.important,
       importantAcked: false,
       snoozeUntil: "",
       quietUntil: "",
+      rounds: [],
       createdAt: now.toISOString(),
       history: [],
     };
-    if (bucket === "today" && !todo.dueDate) todo.dueDate = isoFromParts(seoulParts(now));
-    if (bucket === "next" && !todo.dueDate) todo.dueDate = weekRange(now).nextMonday;
-    if (bucket === "week" && !todo.dueDate) todo.dueDate = weekRange(now).sunday;
     pushHistory(todo, user, "등록", todo.title, now);
     state.todos.push(todo);
     return;
@@ -1040,10 +1132,32 @@ export function applyTodo(state, user, body, now) {
     return { deleted: todo };
   }
   if (body.action === "status") {
-    const status = ["open", "doing", "done"].includes(body.status) ? body.status : "open";
+    const status = ["open", "doing", "done", "paused"].includes(body.status) ? body.status : "open";
+    if (status === "done") return closeTodo(todo, user, now);
     todo.status = status;
-    if (status === "done") todo.snoozeUntil = "";
-    pushHistory(todo, user, status === "done" ? "완료" : status === "doing" ? "진행중" : "다시 열기", "", now);
+    if (status !== "paused") todo.snoozeUntil = "";
+    pushHistory(todo, user, status === "doing" ? "진행중" : status === "paused" ? "대기" : "예정", "", now);
+    return;
+  }
+  if (body.action === "finish-round") {
+    addRound(todo, now, "이번에 종료");
+    todo.status = "paused";
+    todo.snoozeUntil = "";
+    todo.quietUntil = "";
+    todo.timerUntil = "";
+    pushHistory(todo, user, "이번에 종료", `${todo.rounds.length}회차`, now);
+    return;
+  }
+  if (body.action === "reuse") {
+    todo.status = "open";
+    todo.snoozeUntil = "";
+    todo.quietUntil = "";
+    if (todo.timerMinutes) todo.timerUntil = new Date(now.getTime() + todo.timerMinutes * 60000).toISOString();
+    pushHistory(todo, user, "다음번 시작", "같은 설정으로 다시 사용", now);
+    return;
+  }
+  if (body.action === "close") {
+    closeTodo(todo, user, now);
     return;
   }
   if (body.action === "move") {
@@ -1095,6 +1209,25 @@ export function applyTodo(state, user, body, now) {
     if (body.note != null) todo.note = String(body.note || "").slice(0, 2000);
     pushHistory(todo, user, "수정", todo.title, now);
   }
+}
+
+function addRound(todo, now, action) {
+  todo.rounds = todo.rounds || [];
+  todo.rounds.push({
+    n: todo.rounds.length + 1,
+    at: now.toISOString(),
+    day: isoFromParts(seoulParts(now)),
+    action,
+  });
+}
+
+function closeTodo(todo, user, now) {
+  if (todo.status !== "paused") addRound(todo, now, "완전 종료");
+  todo.status = "done";
+  todo.snoozeUntil = "";
+  todo.quietUntil = "";
+  todo.timerUntil = "";
+  pushHistory(todo, user, "완전 종료", `${(todo.rounds || []).length}회차`, now);
 }
 
 function bucketLabel(bucket) {

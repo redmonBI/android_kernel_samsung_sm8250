@@ -104,6 +104,41 @@ test("urgent work due today blocks inside the existing ledger", () => {
   assert.equal(live.reminders[0].reminderLabel, "오늘 마감");
 });
 
+test("a timer needs no date, a round can be closed and reused, and only one date is required", () => {
+  const state = ledger();
+  ingestRows(state, [row({ priority: "보통", dueRaw: "2026.11.01" })], meta);
+  applyLive(state, LEAD, { type: "todo", action: "create", title: "현장 확인", kind: "spot", timer: "60", bucket: "today" }, NOW);
+  const todo = state.todos.find((item) => item.title === "현장 확인");
+  assert.equal(todo.dueDate, "");
+  assert.equal(todo.startDate, "");
+  assert.equal(todo.timerMinutes, 60);
+  let live = buildLive(state, LEAD, NOW);
+  assert.equal(live.blocking.some((item) => item.title === "현장 확인"), false);
+  live = buildLive(state, LEAD, new Date(NOW.getTime() + 61 * 60000));
+  assert.equal(live.blocking.some((item) => item.title === "현장 확인"), true);
+
+  applyLive(state, LEAD, { type: "todo", action: "finish-round", id: todo.id }, NOW);
+  assert.equal(todo.status, "paused");
+  assert.equal(todo.rounds.length, 1);
+  live = buildLive(state, LEAD, NOW);
+  assert.equal(live.todos.reuse.some((item) => item.id === todo.id), true);
+  assert.equal(live.todoReport[0].total, 1);
+  assert.equal(live.todoReport[0].week, 1);
+  assert.equal(live.todoReport[0].year, 1);
+
+  applyLive(state, LEAD, { type: "todo", action: "reuse", id: todo.id }, NOW);
+  assert.equal(todo.status, "open");
+  assert.ok(todo.timerUntil);
+
+  applyLive(state, LEAD, { type: "todo", action: "create", title: "종료만", dueDate: "2026-10-16", bucket: "later" }, NOW);
+  applyLive(state, LEAD, { type: "todo", action: "create", title: "시작만", startDate: "2026-10-01", kind: "repeat", bucket: "later" }, NOW);
+  assert.equal(state.todos.find((item) => item.title === "종료만").startDate, "");
+  assert.equal(state.todos.find((item) => item.title === "시작만").dueDate, "");
+  assert.throws(() => applyLive(state, LEAD, {
+    type: "todo", action: "create", title: "뒤집힌 기간", startDate: "2026-10-20", dueDate: "2026-10-01",
+  }, NOW));
+});
+
 test("marking a personal todo important blocks, and moving it to next week clears today", () => {
   const state = ledger();
   ingestRows(state, [row({ priority: "보통", dueRaw: "2026.11.01" })], meta);

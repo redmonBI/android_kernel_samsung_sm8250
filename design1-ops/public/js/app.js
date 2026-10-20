@@ -35,6 +35,7 @@ const ui = {
   focus: null,
   panel: "",
   followSheet: true,
+  todoFilter: "all",
 };
 
 let state = null;
@@ -678,10 +679,27 @@ document.addEventListener("click", async (event) => {
     showToast(act === "live-done" ? "완료로 표시했습니다. 시트 상태도 완료로 고쳐 주세요." : "재확인할 시간을 잡아 두었습니다.");
     return;
   }
+  if (act === "todo-filter") {
+    ui.todoFilter = el.dataset.filter || "all";
+    render();
+    return;
+  }
+  if (act === "todo-round" || act === "todo-close" || act === "todo-reuse") {
+    const action = act === "todo-round" ? "finish-round" : act === "todo-close" ? "close" : "reuse";
+    adoptState(await api("/api/live", { method: "POST", body: JSON.stringify({ type: "todo", action, id: el.dataset.id }) }));
+    ui.focus = null;
+    ui.panel = "";
+    showToast(act === "todo-round" ? "이번 회차를 종료했습니다. 같은 설정으로 다시 쓸 수 있습니다." : act === "todo-close" ? "할 일을 완전히 종료했습니다." : "같은 설정으로 다음번을 열었습니다.");
+    return;
+  }
   if (act === "todo-status" || act === "todo-move" || act === "todo-flag" || act === "todo-delete") {
     const payload = { type: "todo", id: el.dataset.id };
     if (act === "todo-status") Object.assign(payload, { action: "status", status: el.dataset.status });
-    if (act === "todo-move") Object.assign(payload, { action: "move", bucket: el.dataset.bucket });
+    if (act === "todo-move") {
+      Object.assign(payload, { action: "move", bucket: el.dataset.bucket });
+      ui.focus = null;
+      ui.panel = "";
+    }
     if (act === "todo-flag") Object.assign(payload, { action: "flag", important: el.dataset.important === "1" });
     if (act === "todo-delete") {
       payload.action = "delete";
@@ -826,8 +844,12 @@ document.addEventListener("submit", async (event) => {
       action: "create",
       title: form.get("title"),
       note: form.get("note"),
+      kind: form.get("kind"),
+      startDate: form.get("startDate"),
       dueDate: form.get("dueDate"),
       dueTime: form.get("dueTime"),
+      timer: form.get("timer"),
+      timerMinutes: form.get("timerMinutes"),
       bucket: form.get("bucket"),
       important: form.get("important") === "on",
     }) }));
