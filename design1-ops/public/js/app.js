@@ -36,6 +36,7 @@ const ui = {
   panel: "",
   followSheet: true,
   todoFilter: "all",
+  todoLayout: "cards",
 };
 
 let state = null;
@@ -538,6 +539,7 @@ document.addEventListener("click", async (event) => {
     return;
   }
   if (!user) return;
+  if (act === "todo-check") return;
   if (act === "nav") return go(el.dataset.view);
   if (act === "logout") return logout();
   if (act === "select") return selectTask(el.dataset.id, el.dataset.view || (ui.view === "work" ? "work" : ui.view));
@@ -684,6 +686,12 @@ document.addEventListener("click", async (event) => {
     render();
     return;
   }
+  if (act === "todo-layout") {
+    ui.todoLayout = el.dataset.layout === "list" ? "list" : "cards";
+    localStorage.setItem("lumen-todo-layout", ui.todoLayout);
+    render();
+    return;
+  }
   if (act === "todo-round" || act === "todo-close" || act === "todo-reuse") {
     const action = act === "todo-round" ? "finish-round" : act === "todo-close" ? "close" : "reuse";
     adoptState(await api("/api/live", { method: "POST", body: JSON.stringify({ type: "todo", action, id: el.dataset.id }) }));
@@ -716,6 +724,16 @@ document.addEventListener("click", async (event) => {
 
 document.addEventListener("change", async (event) => {
   const target = event.target;
+  if (target.dataset?.act === "todo-check") {
+    const action = target.checked ? (target.dataset.kind === "once" ? "close" : "finish-round") : "reuse";
+    try {
+      adoptState(await api("/api/live", { method: "POST", body: JSON.stringify({ type: "todo", action, id: target.dataset.id }) }));
+      showToast(target.checked ? "체크했습니다." : "체크를 해제하고 다시 열었습니다.");
+    } catch (error) {
+      showToast(error.message);
+    }
+    return;
+  }
   if (target.dataset?.filter) {
     if (target.dataset.filter === "group") ui.group = target.value || "status";
     else ui.filters[target.dataset.filter] = target.value;
@@ -835,6 +853,18 @@ document.addEventListener("submit", async (event) => {
     for (const id of ["JH", "DE", "GY"]) state.settings.capacity[id] = Number(form.get(id));
     await saveState();
     showToast("수용량을 저장했습니다.");
+    return;
+  }
+  if (formKey === "todo-quick") {
+    const form = new FormData(event.target);
+    adoptState(await api("/api/live", { method: "POST", body: JSON.stringify({
+      type: "todo",
+      action: "create",
+      title: form.get("title"),
+      bucket: "today",
+      kind: "once",
+    }) }));
+    showToast("체크리스트에 넣었습니다.");
     return;
   }
   if (formKey === "todo-form") {
@@ -1006,6 +1036,7 @@ async function pullSheet() {
 
 async function boot() {
   try { ui.personalLayout = JSON.parse(localStorage.getItem("lumen-personal-layout") || "null"); } catch { ui.personalLayout = null; }
+  ui.todoLayout = localStorage.getItem("lumen-todo-layout") === "list" ? "list" : "cards";
   let serverUp = false;
   try {
     const response = await fetch(siteUrl("api/health"), { cache: "no-store" });

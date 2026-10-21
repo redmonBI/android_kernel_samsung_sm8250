@@ -34,6 +34,14 @@ button { cursor: pointer; }
 h1, h2, h3, p { margin: 0; }
 .live-row { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--line); }
 .todo-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; align-items: start; }
+.check-quick { display: flex; gap: 8px; align-items: center; }
+.check-quick input { flex: 1; width: auto; }
+.check-list { display: grid; }
+.check-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 2px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.check-row input { width: 18px; height: 18px; margin-top: 3px; flex: none; }
+.check-row b { display: block; }
+.check-row small { display: block; color: var(--muted); }
+.check-row.is-checked b { text-decoration: line-through; color: var(--muted); }
 .todo-table-wrap { overflow-x: auto; }
 .todo-stats { width: 100%; border-collapse: collapse; font-size: 13px; }
 .todo-stats th, .todo-stats td { border-bottom: 1px solid var(--line); padding: 8px 6px; text-align: left; white-space: nowrap; }

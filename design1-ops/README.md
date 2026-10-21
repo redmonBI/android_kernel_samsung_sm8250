@@ -10,7 +10,7 @@
 
 내부 서버를 켜 두지 않아도 브라우저로 엽니다.
 
-https://endless-plane-4c7xktn.shipstatic.com
+https://bright-sender-u93qkbk.shipstatic.com
 
 로그인 화면에 “무료 웹 주소로 열려 있습니다”가 보이면 접속된 것입니다. 최신 주간 시트는 그 페이지가 구글에서 직접 읽습니다. 완료, 재확인, 일정 변경, 개인 할 일은 그 브라우저에 저장됩니다. 다른 컴퓨터와 자동으로 공유되지는 않습니다.
 

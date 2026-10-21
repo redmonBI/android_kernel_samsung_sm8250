@@ -333,12 +333,15 @@ function renderTodos(ctx) {
   const live = ctx.state.live;
   const todos = live?.todos || { doing: [], today: [], week: [], next: [], later: [], reuse: [], done: [] };
   const filter = ctx.ui.todoFilter || "all";
+  const layout = ctx.ui.todoLayout === "list" ? "list" : "cards";
   const show = (name) => filter === "all" || filter === name;
   const column = (title, items) => `<section class="panel"><h2>${title} ${items.length}</h2>${items.length ? items.map(todoCard).join("") : `<div class="empty">비어 있습니다.</div>`}</section>`;
   const scheduled = [...(todos.today || []), ...(todos.week || []), ...(todos.next || []), ...(todos.later || []), ...(todos.reuse || [])];
   return `${head("할 일", "시트 밖의 내 일", "시작일만, 종료일만, 또는 날짜 없이 1시간·2시간 타이머로 등록합니다. 수시·반복 업무는 이번에만 닫거나 같은 설정으로 다시 씁니다.")}
     <div class="choice" style="margin-bottom:12px">
       ${[["all", "전체"], ["doing", "진행중"], ["scheduled", "예정"], ["done", "종료"]].map(([id, label]) => `<button class="btn ${filter === id ? "primary" : ""}" type="button" data-act="todo-filter" data-filter="${id}">${label}</button>`).join("")}
+      <button class="btn ${layout === "cards" ? "primary" : ""}" type="button" data-act="todo-layout" data-layout="cards">카드</button>
+      <button class="btn ${layout === "list" ? "primary" : ""}" type="button" data-act="todo-layout" data-layout="list">체크리스트</button>
     </div>
     <form id="todo-form" class="panel" style="display:grid;gap:8px">
       <label>할 일<input id="todo-title" name="title" required placeholder="예: 견적 회신"></label>
@@ -356,15 +359,16 @@ function renderTodos(ctx) {
       <button class="btn primary" type="submit">등록</button>
     </form>
     ${todoReport(live?.todoReport || [])}
-    ${show("doing") ? column("진행중", todos.doing || []) : ""}
-    ${show("scheduled") ? `<div class="todo-board">
+    ${layout === "list" ? renderChecklist(todos, filter) : ""}
+    ${layout === "list" ? "" : show("doing") ? column("진행중", todos.doing || []) : ""}
+    ${layout === "list" ? "" : show("scheduled") ? `<div class="todo-board">
       ${column("오늘", todos.today || [])}
       ${column("이번 주", todos.week || [])}
       ${column("다음 주", todos.next || [])}
       ${column("나중", todos.later || [])}
       ${column("재사용 대기", todos.reuse || [])}
     </div>` : ""}
-    ${show("done") ? `<section class="panel"><h2>종료 ${todos.done?.length || 0}</h2>${todos.done?.length ? todos.done.map(todoCard).join("") : `<div class="empty">종료된 할 일이 없습니다.</div>`}</section>` : ""}
+    ${layout === "list" ? "" : show("done") ? `<section class="panel"><h2>종료 ${todos.done?.length || 0}</h2>${todos.done?.length ? todos.done.map(todoCard).join("") : `<div class="empty">종료된 할 일이 없습니다.</div>`}</section>` : ""}
     ${filter === "all" ? "" : `<p class="muted">예정 ${scheduled.length}건 · 진행중 ${(todos.doing || []).length}건 · 종료 ${(todos.done || []).length}건</p>`}`;
 }
 
@@ -377,6 +381,62 @@ function todoReport(rows) {
     <tbody>${rows.map((row) => `<tr><td>${esc(row.title)}</td><td>${esc(kindName[row.kind] || row.kind)}</td><td>${row.total}</td><td>${row.week}</td><td>${row.month}</td><td>${row.quarter}</td><td>${row.half}</td><td>${row.year}</td></tr>`).join("")}</tbody></table></div>
     <p class="muted">이번에 종료하거나 완전 종료할 때마다 회차가 쌓입니다. 표는 그 회차가 속한 주, 월, 분기, 반기, 해를 센 값입니다.</p>
   </section>`;
+}
+
+function checkedTodos(todos, bucket) {
+  return [...(todos.reuse || []), ...(todos.done || [])].filter((todo) => (todo.bucket || "today") === bucket);
+}
+
+function renderChecklist(todos, filter) {
+  const sections = [
+    ["오늘", "today", [...(todos.today || []), ...checkedTodos(todos, "today")]],
+    ["진행중", "doing", todos.doing || []],
+    ["이번 주", "week", [...(todos.week || []), ...checkedTodos(todos, "week")]],
+    ["다음 주", "next", [...(todos.next || []), ...checkedTodos(todos, "next")]],
+    ["나중", "later", [...(todos.later || []), ...checkedTodos(todos, "later")]],
+  ].filter(([, key]) => {
+    if (filter === "doing") return key === "doing";
+    if (filter === "done") return false;
+    if (filter === "scheduled") return key !== "doing";
+    return true;
+  });
+  const visible = sections.flatMap(([, , items]) => items);
+  const doneItems = filter === "done"
+    ? [...(todos.reuse || []), ...(todos.done || [])]
+    : filter === "all"
+      ? []
+      : [];
+  const checkedCount = visible.filter((todo) => todo.closed || todo.paused || todo.status === "done" || todo.status === "paused").length;
+  const rows = sections.map(([title, , items]) => checklistSection(title, items)).join("");
+  const doneBlock = filter === "done"
+    ? checklistSection("종료", doneItems)
+    : "";
+  const total = filter === "done" ? doneItems.length : visible.length;
+  const marked = filter === "done" ? doneItems.length : checkedCount;
+  return `<section class="panel">
+    <form id="todo-quick" class="check-quick">
+      <input name="title" required placeholder="체크할 일을 적고 Enter" autocomplete="off">
+      <button class="btn primary" type="submit">추가</button>
+    </form>
+    <p class="muted">체크 ${marked} / ${total}. 한 번인 일은 체크하면 종료되고, 수시·반복은 이번 회차만 닫힙니다. 체크를 해제하면 같은 설정으로 다시 열립니다.</p>
+    ${rows || doneBlock ? `${rows}${doneBlock}` : `<div class="empty">체크할 일이 없습니다.</div>`}
+  </section>`;
+}
+
+function checklistSection(title, items) {
+  if (!items.length) return "";
+  const ordered = [...items.filter((todo) => !(todo.closed || todo.paused)), ...items.filter((todo) => todo.closed || todo.paused)];
+  return `<h2 style="margin-top:16px">${esc(title)} ${items.length}</h2><div class="check-list">${ordered.map(checkRow).join("")}</div>`;
+}
+
+function checkRow(todo) {
+  const checked = !!(todo.closed || todo.paused || todo.status === "done" || todo.status === "paused");
+  const kindName = { once: "한 번", spot: "수시", repeat: "반복" };
+  const meta = [kindName[todo.kind] || "한 번", todo.dueLabel, (todo.rounds || []).length ? `${todo.rounds.length}회차` : ""].filter(Boolean).join(" · ");
+  return `<label class="check-row ${checked ? "is-checked" : ""}">
+    <input type="checkbox" data-act="todo-check" data-id="${esc(todo.id)}" data-kind="${esc(todo.kind || "once")}" ${checked ? "checked" : ""}>
+    <span><b>${esc(todo.title)}</b><small>${esc(meta)}</small></span>
+  </label>`;
 }
 
 function todoCard(todo) {
