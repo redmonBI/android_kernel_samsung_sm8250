@@ -3,6 +3,7 @@ import path from "path";
 import Database from "better-sqlite3";
 import { SCHEMA } from "./schema";
 import { seedIfEmpty } from "./seed";
+import { ensureSettings } from "./settings";
 
 export type Sql = Database.Database;
 
@@ -28,6 +29,7 @@ export function getDb(): Sql {
   if (!globalForDb.fkDb) {
     const db = openDatabase(databaseFile());
     seedIfEmpty(db);
+    ensureSettings(db);
     globalForDb.fkDb = db;
   }
   return globalForDb.fkDb;

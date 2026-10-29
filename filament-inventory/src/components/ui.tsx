@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { getDb } from "@/lib/db";
 import { won } from "@/lib/format";
+import { getSettings } from "@/lib/settings";
 
 export function Flash({ error, ok }: { error?: string; ok?: string }) {
   if (!error && !ok) return null;
@@ -114,20 +116,21 @@ export function BrandHero({
 }
 
 export function SiteFooter() {
+  const settings = getSettings(getDb());
   return (
     <footer className="border-t border-line">
       <div className="mx-auto flex w-full max-w-page flex-col gap-6 px-5 py-10 md:flex-row md:justify-between">
         <div>
-          <img src="/brand/logo-footer.png" alt="필라멘트코리아" className="h-16 w-auto" />
-          <p className="mt-4 text-sm text-ink">(주)영진이엘 · 대표 권기성</p>
-          <p className="text-sm text-mute">경기도 광명시 하안로 60, 광명SK테크노파크 D동 1308호</p>
-          <a href="/company" className="mt-2 inline-block text-sm text-filament">회사 소개</a>
+          <p className="text-lg tracking-[0.16em]">영진이엘</p>
+          <p className="mt-3 text-sm text-ink">{settings.company_name} · 대표 {settings.ceo}</p>
+          <p className="text-sm text-mute">{settings.address}</p>
+          <a href="/company" className="mt-2 inline-block text-sm text-[#0056B8]">회사 소개</a>
         </div>
         <div className="text-sm leading-7 text-ink">
-          <p>T 02-6278-4227</p>
-          <p>F 02-2689-4228</p>
-          <p>E youngjinel@youngjinel.com</p>
-          <p className="text-mute">필라멘트 문의 yjel1040@naver.com</p>
+          <p>T {settings.phone}</p>
+          <p>F {settings.fax}</p>
+          <p>E {settings.email}</p>
+          <p className="text-mute">필라멘트 {settings.filament_email}</p>
         </div>
       </div>
     </footer>

@@ -1,4 +1,5 @@
 import { FilamentHeader, type NavItem } from "@/components/FilamentHeader";
+import { SiteSwitcher } from "@/components/SiteSwitcher";
 import { SelectionDrawer } from "@/components/SelectionDrawer";
 import { SampleBanner } from "@/components/ui";
 import { requireUser } from "@/lib/auth";
@@ -24,7 +25,8 @@ export default async function StaffLayout({ children }: { children: React.ReactN
   const selected = listItems(db, activeList(db, user.id));
   return (
     <>
-      <FilamentHeader items={items} userName={user.name} />
+      <SiteSwitcher />
+      <FilamentHeader items={items} userName={user.name} withSwitcher />
       <SampleBanner count={sampleProductCount(db)} />
       <main>{children}</main>
       <SelectionDrawer

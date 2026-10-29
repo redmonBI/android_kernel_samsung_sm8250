@@ -16,26 +16,37 @@ export function FilamentHeader({
   items,
   userName,
   dark = false,
+  homeHref = "/",
+  brand = "filament",
+  withSwitcher = false,
 }: {
   items: NavItem[];
   userName?: string | null;
   dark?: boolean;
+  homeHref?: string;
+  brand?: "filament" | "youngjin";
+  withSwitcher?: boolean;
 }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   useEffect(() => {
     setOpen(false);
   }, [pathname]);
+  const accent = brand === "youngjin" ? "border-[#0056B8] text-[#0056B8]" : "border-filament text-filament";
 
   return (
-    <header className={`sticky top-0 z-30 border-b ${dark ? "border-white/15 bg-hero text-white" : "border-line bg-white text-ink"}`}>
+    <header className={`sticky z-30 border-b ${withSwitcher ? "top-10" : "top-0"} ${dark ? "border-white/15 bg-hero text-white" : "border-line bg-white text-ink"}`}>
       <div className="mx-auto flex h-[86px] w-full max-w-page items-center gap-6 px-5">
-        <Link href={userName ? "/app" : "/"} className="shrink-0">
-          <img
-            src={dark ? "/brand/logo-dark.png" : "/brand/logo-light.png"}
-            alt="필라멘트코리아"
-            className="h-9 w-auto"
-          />
+        <Link href={userName ? "/app" : homeHref} className="shrink-0">
+          {brand === "youngjin" ? (
+            <span className="text-[18px] font-medium tracking-[0.22em]">영진이엘</span>
+          ) : (
+            <img
+              src={dark ? "/brand/logo-dark.png" : "/brand/logo-light.png"}
+              alt="필라멘트코리아"
+              className="h-9 w-auto"
+            />
+          )}
         </Link>
         <nav className="ml-auto hidden items-center gap-1 lg:flex" aria-label="주요">
           {items.map((item) => {
@@ -46,7 +57,7 @@ export function FilamentHeader({
                 href={item.href}
                 aria-current={current ? "page" : undefined}
                 className={`px-3 py-2 text-[13px] font-medium tracking-[0.14em] ${
-                  current ? "border-b-2 border-filament text-filament" : dark ? "text-white" : "text-ink"
+                  current ? `border-b-2 ${accent}` : dark ? "text-white" : "text-ink"
                 }`}
               >
                 {item.label}

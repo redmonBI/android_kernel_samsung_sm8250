@@ -1,10 +1,24 @@
 import Link from "next/link";
 import { CompanyNav } from "@/components/CompanyNav";
-import { companyFacts, philosophy, visionSteps } from "@/content/company";
+import { philosophy, visionSteps } from "@/content/company";
+import { getDb } from "@/lib/db";
+import { getSettings } from "@/lib/settings";
 
 export const metadata = { title: "회사개요" };
 
 export default function CompanyPage() {
+  const settings = getSettings(getDb());
+  const facts = [
+    ["대표이사", settings.ceo],
+    ["설립", "2001년 7월 6일"],
+    ["주업종", "IoT, 조명, LED, 전기부품, 태양에너지, 전기공사"],
+    ["본사", settings.address],
+    ["기업부설연구소", "경기도 광명시 하안로 60 D동 208호"],
+    ["공장", "광명, 안산, 중국"],
+    ["전화", settings.phone],
+    ["팩스", settings.fax],
+    ["메일", settings.email],
+  ];
   return (
     <div className="mx-auto w-full max-w-page px-5 py-8">
       <p className="text-xs tracking-[0.18em] text-filament">YOUNGJIN EL</p>
@@ -23,7 +37,7 @@ export default function CompanyPage() {
           </p>
           <p className="mt-3 text-sm text-mute">대표이사 권기성</p>
           <dl className="mt-6">
-            {companyFacts.map(([label, value]) => (
+            {facts.map(([label, value]) => (
               <div key={label} className="grid grid-cols-[140px_1fr] gap-3 border-b border-line py-3 text-sm">
                 <dt className="text-mute">{label}</dt>
                 <dd>{value}</dd>

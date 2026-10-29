@@ -1,20 +1,10 @@
-import { FilamentHeader } from "@/components/FilamentHeader";
+import { PublicFrame } from "@/components/PublicFrame";
 import { SiteFooter } from "@/components/ui";
-
-const ITEMS = [
-  { href: "/company", label: "COMPANY" },
-  { href: "/products", label: "PRODUCTS" },
-  { href: "/projects", label: "PROJECTS" },
-  { href: "/procurement", label: "PROCUREMENT" },
-  { href: "/downloads", label: "DOWNLOAD" },
-  { href: "/contact", label: "CONTACT" },
-];
 
 export default function PublicLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
-      <FilamentHeader items={ITEMS} />
-      <main>{children}</main>
+      <PublicFrame>{children}</PublicFrame>
       <SiteFooter />
     </>
   );

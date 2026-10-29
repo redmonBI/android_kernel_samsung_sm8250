@@ -393,62 +393,121 @@ export async function addDefect(formData: FormData) {
   redirect(`/app/products/${slug}?ok=하자 기록을 추가했습니다. 정상 사진과 섞지 않습니다.`);
 }
 
+function adminRedirect(formData: FormData, message: string, key: "ok" | "error" = "ok"): never {
+  const section = String(formData.get("section") ?? "site");
+  redirect(`/app/admin?section=${encodeURIComponent(section)}&${key}=${encodeURIComponent(message)}`);
+}
+
+export async function saveSiteSettings(formData: FormData) {
+  const user = await actor();
+  if (user.role !== "admin" && !canEditContent(user.role)) adminRedirect(formData, "사이트 설정을 바꿀 권한이 없습니다.", "error");
+  const keys = [
+    "company_name", "ceo", "address", "phone", "fax", "email", "filament_email",
+    "youngjin_kicker", "youngjin_title", "youngjin_body",
+    "filament_kicker", "filament_title", "filament_body",
+  ];
+  const db = getDb();
+  const upsert = db.prepare(
+    "INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  );
+  for (const key of keys) {
+    if (!formData.has(key)) continue;
+    upsert.run(key, String(formData.get(key) ?? "").slice(0, 500));
+  }
+  audit(db, user.id, "settings.update", "app_settings", "site", null, { keys });
+  adminRedirect(formData, "사이트 설정을 저장했습니다.");
+}
+
 export async function saveBanner(formData: FormData) {
   const user = await actor();
-  if (user.role !== "admin" && !canEditContent(user.role)) redirect("/app/admin?error=배너를 수정할 권한이 없습니다.");
+  if (user.role !== "admin" && !canEditContent(user.role)) adminRedirect(formData, "배너를 수정할 권한이 없습니다.", "error");
   const id = String(formData.get("id") ?? "");
   const stamp = now();
+  const slot = ["youngjin", "filament", "home"].includes(String(formData.get("slot") ?? "")) ? String(formData.get("slot")) : "filament";
   if (id) {
     getDb()
       .prepare(
-        `UPDATE banners SET title=?, subtitle=?, link_url=?, sort_order=?, visible=?, updated_at=?, updated_by=?, version=version+1 WHERE id=?`,
+        `UPDATE banners SET slot=?, title=?, subtitle=?, link_url=?, image_path=?, sort_order=?, visible=?, updated_at=?, updated_by=?, version=version+1 WHERE id=?`,
       )
       .run(
+        slot,
         String(formData.get("title") ?? "").slice(0, 120),
         String(formData.get("subtitle") ?? "").slice(0, 240),
         String(formData.get("link") ?? "").slice(0, 200),
+        String(formData.get("image") ?? "").slice(0, 240),
         Number(formData.get("sort") ?? 1) || 1,
         formData.get("visible") === "1" ? 1 : 0,
         stamp,
         user.id,
         id,
       );
+  } else {
+    getDb()
+      .prepare(
+        `INSERT INTO banners (id, slot, title, subtitle, image_path, link_url, sort_order, visible, created_at, updated_at, created_by, updated_by, version)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      )
+      .run(
+        uid(),
+        slot,
+        String(formData.get("title") ?? "").slice(0, 120),
+        String(formData.get("subtitle") ?? "").slice(0, 240),
+        String(formData.get("image") ?? "").slice(0, 240),
+        String(formData.get("link") ?? "").slice(0, 200),
+        Number(formData.get("sort") ?? 1) || 1,
+        formData.get("visible") === "1" ? 1 : 0,
+        stamp,
+        stamp,
+        user.id,
+        user.id,
+      );
   }
-  redirect("/app/admin?ok=배너를 저장했습니다.");
+  adminRedirect(formData, "배너를 저장했습니다.");
 }
 
 export async function savePost(formData: FormData) {
   const user = await actor();
   if (user.role !== "admin" && !canEditContent(user.role)) redirect("/app/admin?error=게시 권한이 없습니다.");
   const board = String(formData.get("board") ?? "notice");
-  const allowed = ["notice", "project", "download", "procurement"];
-  if (!allowed.includes(board)) redirect("/app/admin?error=게시판을 확인해 주세요.");
+  const allowed = ["notice", "project", "download", "procurement", "news"];
+  if (!allowed.includes(board)) adminRedirect(formData, "게시판을 확인해 주세요.", "error");
   const stamp = now();
+  const id = String(formData.get("id") ?? "");
+  const title = String(formData.get("title") ?? "").slice(0, 160);
+  const body = String(formData.get("body") ?? "").slice(0, 4000);
+  const image = String(formData.get("image") ?? "").slice(0, 240);
+  const visible = formData.get("visible") === "1" ? 1 : 0;
+  if (!title) adminRedirect(formData, "제목을 입력해 주세요.", "error");
+  if (id) {
+    getDb()
+      .prepare(
+        `UPDATE posts SET board=?, title=?, body=?, image_path=?, visible=?, updated_at=?, updated_by=?, version=version+1 WHERE id=?`,
+      )
+      .run(board, title, body, image, visible, stamp, user.id, id);
+    adminRedirect(formData, "게시글을 수정했습니다.");
+  }
   getDb()
     .prepare(
       `INSERT INTO posts (id, board, title, body, image_path, visible, created_at, updated_at, created_by, updated_by, version)
-       VALUES (?, ?, ?, ?, '', ?, ?, ?, ?, ?, 1)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
     )
-    .run(
-      uid(),
-      board,
-      String(formData.get("title") ?? "").slice(0, 160),
-      String(formData.get("body") ?? "").slice(0, 4000),
-      formData.get("visible") === "1" ? 1 : 0,
-      stamp,
-      stamp,
-      user.id,
-      user.id,
-    );
-  redirect("/app/admin?ok=게시글을 등록했습니다.");
+    .run(uid(), board, title, body, image, visible, stamp, stamp, user.id, user.id);
+  adminRedirect(formData, "게시글을 등록했습니다.");
+}
+
+export async function deletePost(formData: FormData) {
+  const user = await actor();
+  if (user.role !== "admin" && !canEditContent(user.role)) adminRedirect(formData, "삭제 권한이 없습니다.", "error");
+  getDb().prepare("DELETE FROM posts WHERE id = ? AND board != 'inquiry'").run(String(formData.get("id") ?? ""));
+  adminRedirect(formData, "게시글을 삭제했습니다.");
 }
 
 export async function saveMapping(formData: FormData) {
   const user = await actor();
-  if (user.role !== "admin") redirect("/app/admin?error=매핑은 관리자만 바꿉니다.");
+  if (user.role !== "admin") adminRedirect(formData, "매핑은 관리자만 바꿉니다.", "error");
   const source = String(formData.get("source") ?? "").trim();
   const categoryId = String(formData.get("categoryId") ?? "");
-  if (!source) redirect("/app/admin?error=엑셀의 품목구분 값을 입력해 주세요.");
+  if (!source) adminRedirect(formData, "엑셀의 품목구분 값을 입력해 주세요.", "error");
   const stamp = now();
   getDb()
     .prepare(
@@ -457,7 +516,7 @@ export async function saveMapping(formData: FormData) {
        ON CONFLICT(source_value) DO UPDATE SET category_id = excluded.category_id, updated_at = excluded.updated_at, updated_by = excluded.updated_by, version = category_mappings.version + 1`,
     )
     .run(uid(), source, categoryId, stamp, stamp, user.id, user.id);
-  redirect("/app/admin?ok=분류 매핑을 저장했습니다.");
+  adminRedirect(formData, "분류 매핑을 저장했습니다.");
 }
 
 export async function sendInquiry(formData: FormData) {
