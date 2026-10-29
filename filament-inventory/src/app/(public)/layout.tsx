@@ -2,6 +2,7 @@ import { FilamentHeader } from "@/components/FilamentHeader";
 import { SiteFooter } from "@/components/ui";
 
 const ITEMS = [
+  { href: "/company", label: "COMPANY" },
   { href: "/products", label: "PRODUCTS" },
   { href: "/projects", label: "PROJECTS" },
   { href: "/procurement", label: "PROCUREMENT" },

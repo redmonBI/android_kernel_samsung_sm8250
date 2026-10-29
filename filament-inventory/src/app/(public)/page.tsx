@@ -26,6 +26,16 @@ export default function HomePage() {
         body={banner?.subtitle || "사진과 품목코드로 제품을 고르고, 필요한 사양은 담당자에게 문의합니다."}
         image={banner?.image_path ? publicSrc(banner.image_path) : "/products/ALSL-OPT07.jpg"}
       />
+      <section className="border-b border-line">
+        <div className="mx-auto flex w-full max-w-page flex-col gap-4 px-5 py-8 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-xs tracking-[0.18em] text-filament">COMPANY</p>
+            <h2 className="mt-2 text-2xl font-medium">영진이엘, 조명을 한 번에</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-mute">2001년에 시작한 (주)영진이엘이 필라멘트코리아와 램프옴을 운영합니다. 설계, 제조, 납품, 전국 직영 사후관리를 회사 소개에서 볼 수 있습니다.</p>
+          </div>
+          <Link href="/company" className="shrink-0 border border-filament px-4 py-2 text-sm text-filament">회사 소개</Link>
+        </div>
+      </section>
       <section className="mx-auto w-full max-w-page px-5 py-10">
         <div className="flex gap-2 overflow-x-auto">
           {categories.map((category) => (
