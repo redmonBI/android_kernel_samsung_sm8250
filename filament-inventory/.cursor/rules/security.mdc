@@ -1,0 +1,7 @@
+---
+description: 재고 데이터 보안
+globs: filament-inventory/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+실제 엑셀과 `data/app.db`, `data/uploads`는 커밋하지 않는다. 사용자 입력은 React 텍스트로만 출력한다. 업로드는 확장자와 매크로를 검사한다. 공개 페이지 응답에 원가, 하자 수량, 담당자를 넣지 않는다.
