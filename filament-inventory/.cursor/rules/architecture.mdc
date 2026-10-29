@@ -1,0 +1,7 @@
+---
+description: 필라멘트 재고 앱 구조
+globs: filament-inventory/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+화면은 App Router, 데이터는 `src/lib`의 SQLite다. 구매원가는 `toClientProduct`에서만 역할에 따라 붙인다. 수량과 원가 변경은 조정 승인을 거친다. 엑셀 반영은 `preview` 승인 전에 원장을 바꾸지 않는다.

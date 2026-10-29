@@ -1,0 +1,7 @@
+---
+description: 필라멘트 화면 규칙
+globs: filament-inventory/src/**/*.tsx
+alwaysApply: false
+---
+
+색은 `#1A419C`, `#080706`, `#333333`, `#777777`, `#E1E1E1`, `#F6F7F9`만 브랜드로 쓴다. 상태 색은 배지 글자와 함께 쓴다. 본문 폭은 1440px, 헤더는 86px, 제품 사진은 contain이다. 카드에 그림자와 그라데이션을 넣지 않는다.

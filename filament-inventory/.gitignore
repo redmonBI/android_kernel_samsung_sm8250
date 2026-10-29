@@ -1,0 +1,16 @@
+node_modules
+.next
+# 공개 게시판에서 추가로 받은 제품 사진. 이미 추적 중인 샘플 사진은 유지된다.
+public/products/*
+public/projects/gallery-*
+data/*.db
+data/*.db-*
+data/*.db-journal
+data/uploads
+public/uploads
+.env
+.env.local
+tsconfig.tsbuildinfo
+playwright-report
+test-results
+*.log

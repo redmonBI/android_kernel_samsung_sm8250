@@ -1,0 +1,7 @@
+---
+description: 재고 앱 테스트
+globs: filament-inventory/tests/**/*.ts
+alwaysApply: false
+---
+
+가용수량, 총액 일치, 원가 누락, 엑셀 승인 전후, 예약 초과는 `tests/domain.test.ts`에서 깨지면 안 된다. 테스트 DB는 임시 파일이고 예시 시드를 쓴다.
