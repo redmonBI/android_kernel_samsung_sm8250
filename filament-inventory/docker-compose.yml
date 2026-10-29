@@ -1,0 +1,15 @@
+# 선택 사항. 이 앱의 기본 실행은 Docker 없이 SQLite(data/app.db)입니다.
+# 사내 서버에서 PostgreSQL로 옮길 때 아래 서비스를 쓸 수 있습니다.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: filament
+      POSTGRES_PASSWORD: filament
+      POSTGRES_DB: filament
+    ports:
+      - "5432:5432"
+    volumes:
+      - filament_pg:/var/lib/postgresql/data
+volumes:
+  filament_pg:
