@@ -20,6 +20,7 @@ export function ProductCatalogCard({
   showCost?: boolean;
 }) {
   const price = product.promo_price ?? product.sell_price;
+  const stockMissing = product.erp_qty === 0 && product.sell_price === 0 && !product.promo_price;
   return (
     <article className="relative border border-line bg-white">
       {staff ? (
@@ -56,15 +57,21 @@ export function ProductCatalogCard({
         <p className="line-clamp-2 text-sm text-mute">{product.name}</p>
         {staff ? (
           <div className="space-y-1 pt-1 text-xs">
-            <p>가용 {product.available_qty.toLocaleString("ko-KR")}</p>
-            <div className="flex flex-wrap gap-1">
-              <GradeBadge grade={product.grade} />
-              <StatusBadge value={product.physical_status} />
-              <StatusBadge value={product.work_status} />
-            </div>
-            <p>{product.promo_price ? `프로모션가 ${won(product.promo_price)}` : `판매가 ${won(price)}`}</p>
-            {showCost ? <p className="text-mute">구매원가 {won(product.unit_cost)}</p> : null}
-            <p className="text-mute">{product.department_name || "담당 부서 없음"} · {product.sales_priority}</p>
+            {stockMissing ? (
+              <p>재고 미등록</p>
+            ) : (
+              <>
+                <p>가용 {product.available_qty.toLocaleString("ko-KR")}</p>
+                <div className="flex flex-wrap gap-1">
+                  <GradeBadge grade={product.grade} />
+                  <StatusBadge value={product.physical_status} />
+                  <StatusBadge value={product.work_status} />
+                </div>
+                <p>{product.promo_price ? `프로모션가 ${won(product.promo_price)}` : `판매가 ${won(price)}`}</p>
+                {showCost ? <p className="text-mute">구매원가 {won(product.unit_cost)}</p> : null}
+                <p className="text-mute">{product.department_name || "담당 부서 없음"} · {product.sales_priority}</p>
+              </>
+            )}
           </div>
         ) : (
           <p className="text-xs text-mute">{product.category_name}</p>

@@ -134,7 +134,13 @@ export async function CatalogScreen({
                       <span className="inline-flex gap-1"><GradeBadge grade={product.grade} /><StatusBadge value={product.work_status} /></span>
                     </td>
                   ) : null}
-                  <td className="py-3">{mode === "staff" ? won(product.promo_price ?? product.sell_price) : "문의"}</td>
+                  <td className="py-3">
+                    {mode === "staff"
+                      ? product.erp_qty === 0 && product.sell_price === 0 && !product.promo_price
+                        ? "재고 미등록"
+                        : won(product.promo_price ?? product.sell_price)
+                      : "문의"}
+                  </td>
                 </tr>
               ))}
             </tbody>
